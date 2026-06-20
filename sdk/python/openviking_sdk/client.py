@@ -141,6 +141,7 @@ class Session:
         turn_id: str | None = None,
         message_kind: str | None = None,
         source_message_ids: list[str] | None = None,
+        auto_commit_policy: dict | None = None,
     ) -> Dict[str, Any]:
         semantic_kwargs = {
             key: value
@@ -159,10 +160,19 @@ class Session:
             created_at=created_at,
             peer_id=peer_id,
             **semantic_kwargs,
+            auto_commit_policy=auto_commit_policy,
         )
 
-    async def batch_add_messages(self, messages: list[dict]) -> Dict[str, Any]:
-        return await self._client.batch_add_messages(self.session_id, messages)
+    async def batch_add_messages(
+        self,
+        messages: list[dict],
+        auto_commit_policy: dict | None = None,
+    ) -> Dict[str, Any]:
+        return await self._client.batch_add_messages(
+            self.session_id,
+            messages,
+            auto_commit_policy=auto_commit_policy,
+        )
 
     async def commit(
         self,
@@ -217,6 +227,7 @@ class SyncSession:
         turn_id: str | None = None,
         message_kind: str | None = None,
         source_message_ids: list[str] | None = None,
+        auto_commit_policy: dict | None = None,
     ) -> Dict[str, Any]:
         semantic_kwargs = {
             key: value
@@ -235,10 +246,19 @@ class SyncSession:
             created_at=created_at,
             peer_id=peer_id,
             **semantic_kwargs,
+            auto_commit_policy=auto_commit_policy,
         )
 
-    def batch_add_messages(self, messages: list[dict]) -> Dict[str, Any]:
-        return self._client.batch_add_messages(self.session_id, messages)
+    def batch_add_messages(
+        self,
+        messages: list[dict],
+        auto_commit_policy: dict | None = None,
+    ) -> Dict[str, Any]:
+        return self._client.batch_add_messages(
+            self.session_id,
+            messages,
+            auto_commit_policy=auto_commit_policy,
+        )
 
     def commit(
         self,
@@ -689,10 +709,13 @@ class AsyncHTTPClient:
         self,
         session_id: str,
         messages: list[dict],
+        auto_commit_policy: dict | None = None,
         telemetry: Any = False,
     ) -> Dict[str, Any]:
         session_path = self._path_segment(session_id)
         payload: Dict[str, Any] = {"messages": messages}
+        if auto_commit_policy is not None:
+            payload["auto_commit_policy"] = auto_commit_policy
         if telemetry is not False:
             payload["telemetry"] = telemetry
         response = await self._request(
@@ -1355,6 +1378,7 @@ class AsyncHTTPClient:
         parts: list[dict] | None = None,
         created_at: str | None = None,
         peer_id: str | None = None,
+        auto_commit_policy: dict | None = None,
         telemetry: Any = False,
         turn_id: str | None = None,
         message_kind: str | None = None,
@@ -1373,6 +1397,7 @@ class AsyncHTTPClient:
             "turn_id": turn_id,
             "message_kind": message_kind,
             "source_message_ids": source_message_ids,
+            "auto_commit_policy": auto_commit_policy,
         }
         payload.update({key: value for key, value in optional.items() if value is not None})
         if telemetry is not False:
@@ -1811,11 +1836,25 @@ class SyncHTTPClient:
         self,
         session_id: str,
         messages: list[dict],
+        auto_commit_policy: dict | None = None,
         telemetry: Any = False,
     ) -> Dict[str, Any]:
         if telemetry is False:
-            return run_async(self._async_client.batch_add_messages(session_id, messages))
-        return run_async(self._async_client.batch_add_messages(session_id, messages, telemetry))
+            return run_async(
+                self._async_client.batch_add_messages(
+                    session_id,
+                    messages,
+                    auto_commit_policy=auto_commit_policy,
+                )
+            )
+        return run_async(
+            self._async_client.batch_add_messages(
+                session_id,
+                messages,
+                auto_commit_policy=auto_commit_policy,
+                telemetry=telemetry,
+            )
+        )
 
     def add_skill(
         self,
@@ -2289,6 +2328,7 @@ class SyncHTTPClient:
         parts: list[dict] | None = None,
         created_at: str | None = None,
         peer_id: str | None = None,
+        auto_commit_policy: dict | None = None,
         telemetry: Any = False,
         turn_id: str | None = None,
         message_kind: str | None = None,
@@ -2300,6 +2340,7 @@ class SyncHTTPClient:
             "parts": parts,
             "created_at": created_at,
             "peer_id": peer_id,
+            "auto_commit_policy": auto_commit_policy,
         }
         kwargs.update(
             {

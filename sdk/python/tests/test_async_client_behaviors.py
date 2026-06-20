@@ -64,6 +64,38 @@ async def test_async_http_client_batch_add_messages_posts_batch_payload():
 
 
 @pytest.mark.asyncio
+async def test_async_http_client_add_message_posts_auto_commit_policy():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
+    client._http = fake_http
+    client._handle_response_data = lambda _response: {"result": {"message_id": "msg-1"}}
+
+    policy = {
+        "enabled": True,
+        "token_threshold": 128,
+        "idle_timeout_seconds": 30,
+        "keep_recent_count": 2,
+    }
+
+    result = await client.add_message(
+        "demo-session",
+        role="user",
+        content="hello",
+        auto_commit_policy=policy,
+    )
+
+    assert result == {"message_id": "msg-1"}
+    fake_http.post.assert_awaited_once_with(
+        "/api/v1/sessions/demo-session/messages",
+        json={
+            "role": "user",
+            "content": "hello",
+            "auto_commit_policy": policy,
+        },
+    )
+
+
+@pytest.mark.asyncio
 async def test_async_http_client_batch_add_messages_url_encodes_session_id():
     client = AsyncHTTPClient(url="http://localhost:1933")
     fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
@@ -126,6 +158,35 @@ async def test_async_http_client_sends_message_semantics_and_turn_retention():
         "retained_message_token_budget": 12_000,
         "min_raw_tail_steps": 1,
     }
+
+
+@pytest.mark.asyncio
+async def test_async_http_client_batch_add_messages_posts_top_level_auto_commit_policy():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
+    client._http = fake_http
+    client._handle_response_data = lambda _response: {
+        "result": {"session_id": "batch-session", "message_count": 2, "added": 2}
+    }
+
+    messages = [{"role": "user", "content": "hello"}]
+    policy = {
+        "enabled": True,
+        "idle_timeout_seconds": 45,
+        "keep_recent_count": 1,
+    }
+
+    result = await client.batch_add_messages(
+        "batch-session",
+        messages,
+        auto_commit_policy=policy,
+    )
+
+    assert result == {"session_id": "batch-session", "message_count": 2, "added": 2}
+    fake_http.post.assert_awaited_once_with(
+        "/api/v1/sessions/batch-session/messages/batch",
+        json={"messages": messages, "auto_commit_policy": policy},
+    )
 
 
 @pytest.mark.asyncio
@@ -208,7 +269,40 @@ def test_sync_http_client_batch_add_messages_forwards_to_async_client():
 
     assert result == {"session_id": "batch-session", "message_count": 2, "added": 2}
     assert mock_run.called
-    mock_batch.assert_called_once_with("batch-session", messages)
+    mock_batch.assert_called_once_with(
+        "batch-session",
+        messages,
+        auto_commit_policy=None,
+    )
+
+
+def test_sync_http_client_batch_add_messages_forwards_auto_commit_policy():
+    client = SyncHTTPClient(url="http://localhost:1933")
+    messages = [{"role": "user", "content": "hello"}]
+    policy = {"enabled": True, "idle_timeout_seconds": 20}
+
+    with patch.object(
+        client._async_client,
+        "batch_add_messages",
+        return_value={"session_id": "batch-session", "message_count": 1, "added": 1},
+    ) as mock_batch:
+        with patch(
+            "openviking_sdk.client.run_async",
+            return_value={"session_id": "batch-session", "message_count": 1, "added": 1},
+        ) as mock_run:
+            result = client.batch_add_messages(
+                "batch-session",
+                messages,
+                auto_commit_policy=policy,
+            )
+
+    assert result == {"session_id": "batch-session", "message_count": 1, "added": 1}
+    assert mock_run.called
+    mock_batch.assert_called_once_with(
+        "batch-session",
+        messages,
+        auto_commit_policy=policy,
+    )
 
 
 def test_sync_http_client_session_returns_sync_session_wrapper():
@@ -244,6 +338,34 @@ def test_sync_session_add_message_wraps_async_client():
         parts=None,
         created_at=None,
         peer_id=None,
+        auto_commit_policy=None,
+    )
+
+
+def test_sync_session_add_message_wraps_auto_commit_policy():
+    client = SyncHTTPClient(url="http://localhost:1933")
+    session = client.session("demo-session")
+    policy = {"enabled": True, "token_threshold": 64}
+
+    with patch.object(
+        client._async_client, "add_message", Mock(return_value=object())
+    ) as mock_add_message:
+        with patch(
+            "openviking_sdk.client.run_async",
+            return_value={"message_id": "msg-1"},
+        ) as mock_run:
+            result = session.add_message("user", content="hello", auto_commit_policy=policy)
+
+    assert result == {"message_id": "msg-1"}
+    assert mock_run.called
+    mock_add_message.assert_called_once_with(
+        "demo-session",
+        role="user",
+        content="hello",
+        parts=None,
+        created_at=None,
+        peer_id=None,
+        auto_commit_policy=policy,
     )
 
 

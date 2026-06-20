@@ -20,6 +20,7 @@ from openviking.message.part import ContextPart, TextPart, ToolPart
 from openviking.pyagfs.exceptions import AGFSClientError, AGFSHTTPError, AGFSNotFoundError
 from openviking.server.config import ToolOutputExternalizationConfig
 from openviking.server.identity import RequestContext, Role
+from openviking.service.session_auto_commit import should_enable_auto_commit
 from openviking.session.memory.constants import EXECUTION_MEMORY_TYPES
 from openviking.session.memory_policy import MemoryPolicy
 from openviking.session.retention import (
@@ -395,6 +396,10 @@ class SessionMeta:
     retained_message_token_budget: int = 0
     min_raw_tail_steps: int = 1
     memory_policy: Optional[Dict[str, Any]] = None
+    auto_commit_policy: Optional[Dict[str, Any]] = None
+    last_message_at: str = ""
+    auto_commit_last_error: str = ""
+    auto_commit_last_error_at: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         data = {
@@ -416,6 +421,12 @@ class SessionMeta:
             "retained_message_token_budget": self.retained_message_token_budget,
             "min_raw_tail_steps": self.min_raw_tail_steps,
             "memory_policy": dict(self.memory_policy) if self.memory_policy is not None else None,
+            "auto_commit_policy": (
+                dict(self.auto_commit_policy) if self.auto_commit_policy is not None else None
+            ),
+            "last_message_at": self.last_message_at,
+            "auto_commit_last_error": self.auto_commit_last_error,
+            "auto_commit_last_error_at": self.auto_commit_last_error_at,
         }
         if self.total_message_count is not None:
             data["total_message_count"] = self.total_message_count
@@ -465,6 +476,10 @@ class SessionMeta:
             ),
             min_raw_tail_steps=max(0, int(data.get("min_raw_tail_steps", 1) or 0)),
             memory_policy=data.get("memory_policy"),
+            auto_commit_policy=data.get("auto_commit_policy"),
+            last_message_at=data.get("last_message_at", ""),
+            auto_commit_last_error=data.get("auto_commit_last_error", ""),
+            auto_commit_last_error_at=data.get("auto_commit_last_error_at", ""),
         )
 
 
@@ -583,6 +598,14 @@ class Session:
             self._meta.created_by_account_id = self.ctx.account_id
         if not self._meta.created_by_user_id:
             self._meta.created_by_user_id = self.ctx.user.user_id
+        # Always reconcile live message counters from messages.jsonl so restart
+        # recovery does not trust stale .meta.json values.
+        self._meta.message_count = len(self._messages)
+        if self._meta.total_message_count is not None:
+            self._meta.total_message_count = max(
+                int(self._meta.total_message_count or 0),
+                self._meta.commit_count + len(self._messages),
+            )
         # WM v2: always rebuild pending_tokens from current messages so the
         # counter stays consistent across restarts and is also backfilled for
         # legacy sessions whose .meta.json predates these fields. O(n) once,
@@ -1147,16 +1170,21 @@ class Session:
             msg_tokens = int(msg.estimated_tokens or 0)
             self._stats.total_tokens += msg_tokens
 
-            if self._meta.retention_mode != RETENTION_MODE_TURN_BUDGET:
-                keep = int(self._meta.keep_recent_count or 0)
-                if keep <= 0:
-                    self._meta.pending_tokens += msg_tokens
-                elif len(self._messages) > keep:
-                    pushed_out = self._messages[-(keep + 1)]
-                    self._meta.pending_tokens += int(pushed_out.estimated_tokens or 0)
+        if self._meta.retention_mode != RETENTION_MODE_TURN_BUDGET:
+            keep = int(self._meta.keep_recent_count or 0)
+            if keep <= 0:
+                self._meta.pending_tokens += msg_tokens
+            elif len(self._messages) > keep:
+                pushed_out = self._messages[-(keep + 1)]
+                self._meta.pending_tokens += int(pushed_out.estimated_tokens or 0)
 
         if self._meta.retention_mode == RETENTION_MODE_TURN_BUDGET:
             self._rebuild_pending_tokens()
+
+        self._append_messages_to_jsonl_batch(
+            messages,
+            use_session_lock=should_enable_auto_commit(self._meta.auto_commit_policy),
+        )
 
         self._meta.message_count = len(self._messages)
         if self._meta.total_message_count is not None:
@@ -4706,6 +4734,55 @@ class Session:
             content=overview,
             ctx=self.ctx,
         )
+
+    def _append_messages_to_jsonl_batch(
+        self,
+        messages: List[Message],
+        *,
+        use_session_lock: bool = False,
+    ) -> None:
+        """Append multiple messages to messages.jsonl in a single write."""
+        if not self._viking_fs:
+            return
+        run_async(
+            self._append_messages_to_jsonl_batch_async(
+                messages,
+                use_session_lock=use_session_lock,
+            )
+        )
+
+    async def _append_messages_to_jsonl_batch_async(
+        self,
+        messages: List[Message],
+        *,
+        use_session_lock: bool = False,
+    ) -> None:
+        """Append messages, optionally under the lock used by auto-commit live rewrites."""
+        if not self._viking_fs:
+            return
+
+        batch_content = "".join(msg.to_jsonl() + "\n" for msg in messages)
+        if not use_session_lock:
+            await self._viking_fs.append_file(
+                f"{self._session_uri}/messages.jsonl",
+                batch_content,
+                ctx=self.ctx,
+            )
+            return
+
+        from openviking.storage.transaction import LockContext, get_lock_manager
+
+        session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
+        async with LockContext(
+            get_lock_manager(),
+            [session_path],
+            lock_mode="exact",
+        ):
+            await self._viking_fs.append_file(
+                f"{self._session_uri}/messages.jsonl",
+                batch_content,
+                ctx=self.ctx,
+            )
 
     def _generate_abstract(self) -> str:
         """Generate one-sentence summary for session."""

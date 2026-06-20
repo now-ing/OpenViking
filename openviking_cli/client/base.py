@@ -397,6 +397,7 @@ class BaseClient(ABC):
         parts: list[dict] | None = None,
         created_at: str | None = None,
         peer_id: str | None = None,
+        auto_commit_policy: dict[str, Any] | None = None,
         telemetry: TelemetryRequest = False,
         turn_id: str | None = None,
         message_kind: str | None = None,
@@ -411,6 +412,7 @@ class BaseClient(ABC):
             parts: Parts array (full Part support: TextPart, ContextPart, ImagePart, ToolPart)
             created_at: Message creation time (ISO format string)
             peer_id: Optional stable interaction peer identity.
+            auto_commit_policy: Optional session-level auto-commit policy persisted by the server.
             telemetry: Whether to attach operation telemetry data to the result.
 
         If both content and parts are provided, parts takes precedence.
@@ -422,6 +424,7 @@ class BaseClient(ABC):
         self,
         session_id: str,
         messages: list[dict],
+        auto_commit_policy: dict[str, Any] | None = None,
         telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
         """Add multiple messages to a session in a single request.
@@ -430,6 +433,7 @@ class BaseClient(ABC):
             session_id: Session ID
             messages: List of message dicts, each with "role" and optionally
                       "content", "parts", "created_at", "peer_id".
+            auto_commit_policy: Optional session-level auto-commit policy sent once at batch top level.
             telemetry: Whether to attach operation telemetry data to the result.
 
         Returns:
