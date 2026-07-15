@@ -820,17 +820,20 @@ class LocalClient(BaseClient):
         session_id: Optional[str] = None,
         telemetry: TelemetryRequest = False,
         memory_policy: Optional[Dict[str, Any]] = None,
+        config: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Create a new session.
 
         Args:
             session_id: Optional session ID. If provided, creates a session with the given ID.
                        If None, creates a new session with auto-generated ID.
+            memory_policy: Optional default extraction policy for future commits.
+            config: Optional session config, e.g. ``{"auto_commit_policy": {...}}``.
         """
         execution = await run_with_telemetry(
             operation="session.create",
             telemetry=telemetry,
-            fn=lambda: self._create_session_impl(session_id, memory_policy),
+            fn=lambda: self._create_session_impl(session_id, memory_policy, config),
         )
         return attach_telemetry_payload(
             execution.result,
@@ -841,17 +844,21 @@ class LocalClient(BaseClient):
         self,
         session_id: Optional[str],
         memory_policy: Optional[Dict[str, Any]],
+        config: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         await self._service.initialize_user_directories(self._ctx)
+        auto_commit_policy = (config or {}).get("auto_commit_policy")
         session = await self._service.sessions.create(
             self._ctx,
             session_id,
             memory_policy=memory_policy,
+            auto_commit_policy=auto_commit_policy,
         )
         return {
             "session_id": session.session_id,
             "uri": session.uri,
             "user": session.user.to_dict(),
+            "config": self._service.sessions.effective_session_config(session),
         }
 
     async def list_sessions(self) -> List[Any]:
@@ -864,7 +871,18 @@ class LocalClient(BaseClient):
         result = session.meta.to_dict()
         result["uri"] = session.uri
         result["user"] = session.user.to_dict()
+        result["config"] = self._service.sessions.effective_session_config(session)
         return result
+
+    async def update_session(
+        self,
+        session_id: str,
+        config: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Update a session's config (partial merge)."""
+        session = await self._service.sessions.get(session_id, self._ctx, auto_create=False)
+        merged = await self._service.sessions.update_session_config(session, config)
+        return {"session_id": session_id, "config": merged}
 
     async def get_session_context(
         self, session_id: str, token_budget: int = 128_000
@@ -950,7 +968,6 @@ class LocalClient(BaseClient):
         parts: Optional[List[Dict[str, Any]]] = None,
         created_at: Optional[str] = None,
         peer_id: Optional[str] = None,
-        auto_commit_policy: dict[str, Any] | None = None,
         telemetry: TelemetryRequest = False,
         turn_id: Optional[str] = None,
         message_kind: Optional[str] = None,
@@ -981,7 +998,6 @@ class LocalClient(BaseClient):
                 turn_id,
                 message_kind,
                 source_message_ids,
-                auto_commit_policy,
             ),
         )
         return attach_telemetry_payload(
@@ -1000,7 +1016,6 @@ class LocalClient(BaseClient):
         turn_id: Optional[str],
         message_kind: Optional[str],
         source_message_ids: Optional[List[str]],
-        auto_commit_policy: dict[str, Any] | None,
     ) -> Dict[str, Any]:
         from openviking.message.part import Part, TextPart, part_from_dict
 
@@ -1033,15 +1048,11 @@ class LocalClient(BaseClient):
             await add_async(role, message_parts, **add_kwargs)
         else:
             session.add_message(role, message_parts, **add_kwargs)
-        await self._service.sessions.persist_auto_commit_policy_and_schedule(
-            session,
-            auto_commit_policy=auto_commit_policy,
-            policy_provided=auto_commit_policy is not None,
-        )
         await self._service.sessions.maybe_schedule_auto_commit(
             session_id,
             self._ctx,
-            reason_hint="token_threshold",
+            reason_hint="message_write",
+            session=session,
         )
         return {
             "session_id": session_id,
@@ -1052,7 +1063,6 @@ class LocalClient(BaseClient):
         self,
         session_id: str,
         messages: List[Dict[str, Any]],
-        auto_commit_policy: dict[str, Any] | None = None,
         telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
         """Add multiple messages to a session in one batch."""
@@ -1062,7 +1072,6 @@ class LocalClient(BaseClient):
             fn=lambda: self._batch_add_messages_impl(
                 session_id,
                 messages,
-                auto_commit_policy,
             ),
         )
         return attach_telemetry_payload(
@@ -1074,7 +1083,6 @@ class LocalClient(BaseClient):
         self,
         session_id: str,
         messages: List[Dict[str, Any]],
-        auto_commit_policy: dict[str, Any] | None,
     ) -> Dict[str, Any]:
         from openviking.message.part import Part, TextPart, part_from_dict
 
@@ -1082,12 +1090,6 @@ class LocalClient(BaseClient):
         specs: list[dict[str, Any]] = []
 
         for index, message in enumerate(messages):
-            if "auto_commit_policy" in message:
-                raise ValueError(
-                    "Per-message auto_commit_policy is not allowed in batch requests; "
-                    "use the top-level auto_commit_policy field instead"
-                )
-
             role = message.get("role")
             if not role:
                 raise ValueError(f"messages[{index}]: missing required key 'role'")
@@ -1117,15 +1119,11 @@ class LocalClient(BaseClient):
             added = await add_many_async(specs)
         else:
             added = session.add_messages(specs)
-        await self._service.sessions.persist_auto_commit_policy_and_schedule(
-            session,
-            auto_commit_policy=auto_commit_policy,
-            policy_provided=auto_commit_policy is not None,
-        )
         await self._service.sessions.maybe_schedule_auto_commit(
             session_id,
             self._ctx,
-            reason_hint="token_threshold",
+            reason_hint="message_write",
+            session=session,
         )
         return {
             "session_id": session_id,

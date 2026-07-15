@@ -45,7 +45,6 @@ class Session:
         turn_id: Optional[str] = None,
         message_kind: Optional[str] = None,
         source_message_ids: Optional[List[str]] = None,
-        auto_commit_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Add a message to the session.
 
@@ -79,7 +78,6 @@ class Session:
                 created_at=created_at,
                 peer_id=peer_id,
                 **semantic_kwargs,
-                auto_commit_policy=auto_commit_policy,
             )
         return await self._client.add_message(
             self.session_id,
@@ -88,13 +86,11 @@ class Session:
             created_at=created_at,
             peer_id=peer_id,
             **semantic_kwargs,
-            auto_commit_policy=auto_commit_policy,
         )
 
     async def batch_add_messages(
         self,
         messages: List[Dict[str, Any]],
-        auto_commit_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Add multiple messages to the session in a single request.
 
@@ -108,8 +104,11 @@ class Session:
         return await self._client.batch_add_messages(
             self.session_id,
             messages=messages,
-            auto_commit_policy=auto_commit_policy,
         )
+
+    async def update_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        """Update the session's config (partial merge)."""
+        return await self._client.update_session(self.session_id, config=config)
 
     async def commit(
         self,
