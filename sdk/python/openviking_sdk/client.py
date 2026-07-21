@@ -141,7 +141,6 @@ class Session:
         turn_id: str | None = None,
         message_kind: str | None = None,
         source_message_ids: list[str] | None = None,
-        auto_commit_policy: dict | None = None,
     ) -> Dict[str, Any]:
         semantic_kwargs = {
             key: value
@@ -160,19 +159,13 @@ class Session:
             created_at=created_at,
             peer_id=peer_id,
             **semantic_kwargs,
-            auto_commit_policy=auto_commit_policy,
         )
 
-    async def batch_add_messages(
-        self,
-        messages: list[dict],
-        auto_commit_policy: dict | None = None,
-    ) -> Dict[str, Any]:
-        return await self._client.batch_add_messages(
-            self.session_id,
-            messages,
-            auto_commit_policy=auto_commit_policy,
-        )
+    async def batch_add_messages(self, messages: list[dict]) -> Dict[str, Any]:
+        return await self._client.batch_add_messages(self.session_id, messages)
+
+    async def update_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        return await self._client.update_session_config(self.session_id, config)
 
     async def commit(
         self,
@@ -227,7 +220,6 @@ class SyncSession:
         turn_id: str | None = None,
         message_kind: str | None = None,
         source_message_ids: list[str] | None = None,
-        auto_commit_policy: dict | None = None,
     ) -> Dict[str, Any]:
         semantic_kwargs = {
             key: value
@@ -246,19 +238,13 @@ class SyncSession:
             created_at=created_at,
             peer_id=peer_id,
             **semantic_kwargs,
-            auto_commit_policy=auto_commit_policy,
         )
 
-    def batch_add_messages(
-        self,
-        messages: list[dict],
-        auto_commit_policy: dict | None = None,
-    ) -> Dict[str, Any]:
-        return self._client.batch_add_messages(
-            self.session_id,
-            messages,
-            auto_commit_policy=auto_commit_policy,
-        )
+    def batch_add_messages(self, messages: list[dict]) -> Dict[str, Any]:
+        return self._client.batch_add_messages(self.session_id, messages)
+
+    def update_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        return self._client.update_session_config(self.session_id, config)
 
     def commit(
         self,
@@ -709,13 +695,10 @@ class AsyncHTTPClient:
         self,
         session_id: str,
         messages: list[dict],
-        auto_commit_policy: dict | None = None,
         telemetry: Any = False,
     ) -> Dict[str, Any]:
         session_path = self._path_segment(session_id)
         payload: Dict[str, Any] = {"messages": messages}
-        if auto_commit_policy is not None:
-            payload["auto_commit_policy"] = auto_commit_policy
         if telemetry is not False:
             payload["telemetry"] = telemetry
         response = await self._request(
@@ -1272,15 +1255,27 @@ class AsyncHTTPClient:
         session_id: Optional[str] = None,
         telemetry: Any = False,
         memory_policy: Optional[Dict[str, Any]] = None,
+        config: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         json_body: Dict[str, Any] = {}
         if session_id is not None:
             json_body["session_id"] = session_id
         if memory_policy is not None:
             json_body["memory_policy"] = memory_policy
+        if config is not None:
+            json_body["config"] = config
         if telemetry is not False:
             json_body["telemetry"] = telemetry
         response = await self._request("POST", "/api/v1/sessions", json=json_body)
+        return self._handle_response_data(response).get("result", {})
+
+    async def update_session_config(self, session_id: str, config: Dict[str, Any]) -> Dict[str, Any]:
+        session_path = self._path_segment(session_id)
+        response = await self._request(
+            "PATCH",
+            f"/api/v1/sessions/{session_path}",
+            json={"config": config},
+        )
         return self._handle_response_data(response).get("result", {})
 
     async def list_sessions(self) -> List[Any]:
@@ -1378,7 +1373,6 @@ class AsyncHTTPClient:
         parts: list[dict] | None = None,
         created_at: str | None = None,
         peer_id: str | None = None,
-        auto_commit_policy: dict | None = None,
         telemetry: Any = False,
         turn_id: str | None = None,
         message_kind: str | None = None,
@@ -1397,7 +1391,6 @@ class AsyncHTTPClient:
             "turn_id": turn_id,
             "message_kind": message_kind,
             "source_message_ids": source_message_ids,
-            "auto_commit_policy": auto_commit_policy,
         }
         payload.update({key: value for key, value in optional.items() if value is not None})
         if telemetry is not False:
@@ -1836,7 +1829,6 @@ class SyncHTTPClient:
         self,
         session_id: str,
         messages: list[dict],
-        auto_commit_policy: dict | None = None,
         telemetry: Any = False,
     ) -> Dict[str, Any]:
         if telemetry is False:
@@ -1844,14 +1836,12 @@ class SyncHTTPClient:
                 self._async_client.batch_add_messages(
                     session_id,
                     messages,
-                    auto_commit_policy=auto_commit_policy,
                 )
             )
         return run_async(
             self._async_client.batch_add_messages(
                 session_id,
                 messages,
-                auto_commit_policy=auto_commit_policy,
                 telemetry=telemetry,
             )
         )
@@ -2238,14 +2228,19 @@ class SyncHTTPClient:
         session_id: Optional[str] = None,
         telemetry: Any = False,
         memory_policy: Optional[Dict[str, Any]] = None,
+        config: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         return run_async(
             self._async_client.create_session(
                 session_id=session_id,
                 telemetry=telemetry,
                 memory_policy=memory_policy,
+                config=config,
             )
         )
+
+    def update_session_config(self, session_id: str, config: Dict[str, Any]) -> Dict[str, Any]:
+        return run_async(self._async_client.update_session_config(session_id, config))
 
     def list_sessions(self) -> List[Any]:
         return run_async(self._async_client.list_sessions())
@@ -2328,7 +2323,6 @@ class SyncHTTPClient:
         parts: list[dict] | None = None,
         created_at: str | None = None,
         peer_id: str | None = None,
-        auto_commit_policy: dict | None = None,
         telemetry: Any = False,
         turn_id: str | None = None,
         message_kind: str | None = None,
@@ -2340,7 +2334,6 @@ class SyncHTTPClient:
             "parts": parts,
             "created_at": created_at,
             "peer_id": peer_id,
-            "auto_commit_policy": auto_commit_policy,
         }
         kwargs.update(
             {

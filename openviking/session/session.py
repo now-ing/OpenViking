@@ -1638,6 +1638,7 @@ class Session:
         retained_message_token_budget: Optional[int] = None,
         min_raw_tail_steps: Optional[int] = None,
         persist_keep_recent_count: bool = True,
+        record_auto_commit_success: bool = False,
     ) -> Dict[str, Any]:
         """Archive immediately and enqueue restart-safe Phase 2 processing.
 
@@ -1658,6 +1659,8 @@ class Session:
                 is remembered in meta for subsequent add_message() accounting. The
                 idle full-commit path passes ``False`` with ``keep_recent_count=0``
                 so a one-off full archive does not wipe the stored keep preference.
+            record_auto_commit_success: When ``True``, persist auto-commit success
+                status in the same meta update as the archive boundary.
 
         Returns a task_id for tracking Phase 2 progress.
         """
@@ -1923,6 +1926,10 @@ class Session:
                     self._compression.compression_index,
                 )
                 self._meta.last_commit_at = get_current_timestamp()
+                if record_auto_commit_success:
+                    self._meta.auto_commit_last_error = ""
+                    self._meta.auto_commit_last_error_at = ""
+                    self._meta.last_auto_commit_at = get_current_timestamp()
                 await self._save_meta()
                 await self._write_phase1_ready_marker(archive_uri)
             except Exception as e:
