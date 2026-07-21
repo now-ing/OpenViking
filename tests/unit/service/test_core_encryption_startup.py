@@ -9,9 +9,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from openviking.server.config import SessionAutoCommitConfig
 from openviking.service.core import OpenVikingService
 from openviking.utils.agfs_utils import RagfsBindingConfig
+from openviking_cli.utils.config.memory_config import SessionAutoCommitConfig
 
 
 class _FakeCacheConfig:
@@ -264,7 +264,9 @@ async def test_initialize_skips_session_auto_commit_scheduler_when_idle_disabled
             return 0
 
     class _FakeQueueManager:
+        ADD_RESOURCE = "add_resource"
         EXTERNAL_PARSE = "external_parse"
+        SESSION_COMMIT = "session_commit"
 
         def get_queue(self, *_args, **_kwargs):
             return object()
@@ -303,7 +305,11 @@ async def test_initialize_skips_session_auto_commit_scheduler_when_idle_disabled
     )
     monkeypatch.setattr(
         "openviking.server.dependencies.get_server_config",
-        lambda: SimpleNamespace(session_auto_commit=SessionAutoCommitConfig(idle_enabled=False)),
+        lambda: SimpleNamespace(
+            memory=SimpleNamespace(
+                session_auto_commit=SessionAutoCommitConfig(idle_enabled=False)
+            )
+        ),
     )
 
     service = OpenVikingService.__new__(OpenVikingService)
