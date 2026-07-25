@@ -26,7 +26,8 @@ class CompileLimits(BaseModel):
     skill_files: int = 128
     skill_file_bytes: int = 8 * 1024 * 1024
     skill_total_bytes: int = 32 * 1024 * 1024
-    target_catalog_pages: int = 2000
+    target_inventory_entries: int = 2000
+    target_catalog_pages: int = 10
     initial_prompt_chars: int = 200_000
     tool_uri_count: int = 32
     tool_result_bytes: int = 1024 * 1024

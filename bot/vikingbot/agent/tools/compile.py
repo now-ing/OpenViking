@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from typing import Any, Mapping
 
 import yaml
@@ -96,8 +97,8 @@ class CompileScopedTool(Tool):
             uris.append(str(value))
             if self.name == "openviking_list" and kwargs.get("recursive"):
                 kwargs["node_limit"] = min(
-                    int(kwargs.get("node_limit") or self._limits.target_catalog_pages),
-                    self._limits.target_catalog_pages,
+                    int(kwargs.get("node_limit") or self._limits.target_inventory_entries),
+                    self._limits.target_inventory_entries,
                 )
         elif self.name == "openviking_multi_read":
             values = kwargs.get("uris")
@@ -139,6 +140,7 @@ class SubmitWikiBundleTool(Tool):
         limits: CompileLimits,
         require_workspace_files: bool = False,
         require_workspace_pages: bool = False,
+        wiki_uri_resolver: Callable[[str], Awaitable[bool]] | None = None,
     ):
         self.source_ids = source_ids
         self.catalog_uris = catalog_uris
@@ -148,6 +150,7 @@ class SubmitWikiBundleTool(Tool):
         self.limits = limits
         self.require_workspace_files = require_workspace_files
         self.require_workspace_pages = require_workspace_pages
+        self.wiki_uri_resolver = wiki_uri_resolver
         self.bundle: WikiBundleDraft | None = None
         self.file_payloads: list[bytes | None] = []
         self.skill_name: str | None = None
@@ -370,8 +373,10 @@ class SubmitWikiBundleTool(Tool):
                 final_uri = page.update_uri.rstrip("/")
                 if is_reserved_wiki_page_uri(final_uri):
                     raise ValueError(f"page {page.page_id} cannot update a reserved Wiki file")
-                if final_uri not in self.catalog_uris:
-                    raise ValueError(f"page {page.page_id} update_uri is not in the catalog")
+                if not await self._is_wiki_uri(final_uri):
+                    raise ValueError(
+                        f"page {page.page_id} update_uri is not an existing OKF Wiki page"
+                    )
                 if page.path_hint:
                     raise ValueError(f"page {page.page_id} cannot rename an update")
             else:
@@ -424,7 +429,10 @@ class SubmitWikiBundleTool(Tool):
                 raise ValueError("draft content size limit exceeded")
             if target_type == "resource":
                 page_type = validate_declared_okf_markdown(final_uri, content_bytes)
-                if file.update_uri and final_uri in self.catalog_uris and page_type is None:
+                existing_wiki = bool(
+                    file.update_uri and await self._is_wiki_uri(final_uri)
+                )
+                if existing_wiki and page_type is None:
                     raise ValueError(
                         f"file {index} updates an existing Wiki page and must retain "
                         "valid OKF frontmatter with a non-empty type"
@@ -468,6 +476,16 @@ class SubmitWikiBundleTool(Tool):
         if link_errors:
             raise ValueError(f"{len(link_errors)} invalid link(s): " + "; ".join(link_errors))
         return file_payloads
+
+    async def _is_wiki_uri(self, uri: str) -> bool:
+        if uri in self.catalog_uris:
+            return True
+        if uri not in self.file_catalog_uris or self.wiki_uri_resolver is None:
+            return False
+        if await self.wiki_uri_resolver(uri):
+            self.catalog_uris.add(uri)
+            return True
+        return False
 
     @staticmethod
     def _validate_skill_bundle(bundle: WikiBundleDraft, file_payloads: list[bytes | None]) -> str:

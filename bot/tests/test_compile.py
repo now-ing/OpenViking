@@ -699,6 +699,49 @@ async def test_submit_tool_raw_update_cannot_remove_okf_from_existing_wiki_page(
 
 
 @pytest.mark.asyncio
+async def test_submit_tool_resolves_existing_updates_outside_relevant_catalog():
+    wiki_uri = "viking://resources/wiki/existing.md"
+    artifact_uri = "viking://resources/wiki/PAPER.md"
+    resolved = []
+
+    async def resolve(uri):
+        resolved.append(uri)
+        return uri == wiki_uri
+
+    catalog_uris = set()
+    tool = SubmitWikiBundleTool(
+        source_ids={"src_1"},
+        catalog_uris=catalog_uris,
+        file_catalog_uris={wiki_uri, artifact_uri},
+        target_uri="viking://resources/wiki",
+        limits=CompileLimits(),
+        wiki_uri_resolver=resolve,
+    )
+
+    accepted = await tool.execute(
+        ToolContext(),
+        pages=[_page(1, "Existing", update_uri=wiki_uri, path_hint=None)],
+    )
+    assert accepted.startswith("Wiki bundle accepted")
+    assert wiki_uri in catalog_uris
+
+    rejected = await tool.execute(
+        ToolContext(),
+        pages=[],
+        files=[{"update_uri": wiki_uri, "content": "# Plain Markdown"}],
+    )
+    assert "must retain valid OKF frontmatter" in rejected
+
+    artifact = await tool.execute(
+        ToolContext(),
+        pages=[],
+        files=[{"update_uri": artifact_uri, "content": "# Paper"}],
+    )
+    assert artifact.startswith("Wiki bundle accepted")
+    assert resolved == [wiki_uri, artifact_uri]
+
+
+@pytest.mark.asyncio
 async def test_submit_tool_reports_all_invalid_links():
     tool = SubmitWikiBundleTool(
         source_ids={"src_1"},
@@ -1337,10 +1380,12 @@ async def test_execute_skill_target_skips_recursive_catalog_and_completes(
         source_ids,
         catalog_uris,
         file_catalog_uris,
+        wiki_uri_resolver,
     ):
         del request_loop, parsed_skill, roots, source_ids
         assert catalog_uris == set()
         assert file_catalog_uris == set()
+        assert callable(wiki_uri_resolver)
         registry = ToolRegistry()
         registry.register(
             SubmitWikiBundleTool(
@@ -1482,10 +1527,11 @@ async def test_target_catalog_includes_raw_files_and_marks_wiki_pages():
     class Client:
         def __init__(self):
             self.reads = []
+            self.find_call = None
 
         async def tree(self, uri, *, node_limit):
             assert uri == "viking://resources/ara"
-            assert node_limit == CompileLimits().target_catalog_pages + 1
+            assert node_limit == CompileLimits().target_inventory_entries + 1
             return [
                 {"uri": f"{uri}/Overview.md", "isDir": False, "abstract": "Overview"},
                 {"uri": f"{uri}/PAPER.md", "isDir": False},
@@ -1495,6 +1541,21 @@ async def test_target_catalog_includes_raw_files_and_marks_wiki_pages():
                 {"uri": f"{uri}/figures/chart.png", "isDir": False},
                 {"uri": f"{uri}/.overview.md", "isDir": False},
             ]
+
+        async def find(self, query, **kwargs):
+            self.find_call = (query, kwargs)
+            return {
+                "resources": [
+                    {
+                        "uri": "viking://resources/ara/Overview.md",
+                        "abstract": "Relevant overview",
+                    },
+                    {"uri": "viking://resources/ara/PAPER.md"},
+                    {"uri": "viking://resources/ara/Long.md"},
+                    {"uri": "viking://resources/ara/trace/tree.yaml"},
+                    {"uri": "viking://resources/outside.md"},
+                ]
+            }
 
         async def read_raw(self, uri, *, offset=0, limit=-1):
             assert offset == 0
@@ -1520,7 +1581,11 @@ async def test_target_catalog_includes_raw_files_and_marks_wiki_pages():
     service = object.__new__(BotCompileService)
     service.limits = CompileLimits()
     client = Client()
-    catalog = await service._build_catalog(client, "viking://resources/ara")
+    catalog, inventory = await service._build_catalog(
+        client,
+        "viking://resources/ara",
+        query="compile ResNet\nsource overview",
+    )
 
     assert catalog == [
         {
@@ -1528,20 +1593,13 @@ async def test_target_catalog_includes_raw_files_and_marks_wiki_pages():
             "kind": "wiki_page",
             "title": "Overview",
             "type": "overview",
-            "summary": "Overview",
+            "summary": "Relevant overview",
             "page_id": 1,
         },
         {
             "uri": "viking://resources/ara/PAPER.md",
             "kind": "file",
             "title": "PAPER.md",
-            "type": "",
-            "summary": "",
-        },
-        {
-            "uri": "viking://resources/ara/broken.md",
-            "kind": "file",
-            "title": "broken.md",
             "type": "",
             "summary": "",
         },
@@ -1560,22 +1618,54 @@ async def test_target_catalog_includes_raw_files_and_marks_wiki_pages():
             "type": "",
             "summary": "",
         },
-        {
-            "uri": "viking://resources/ara/figures/chart.png",
-            "kind": "file",
-            "title": "chart.png",
-            "type": "",
-            "summary": "",
-        },
     ]
+    assert set(inventory) == {
+        "viking://resources/ara/Overview.md",
+        "viking://resources/ara/PAPER.md",
+        "viking://resources/ara/broken.md",
+        "viking://resources/ara/Long.md",
+        "viking://resources/ara/trace/tree.yaml",
+        "viking://resources/ara/figures/chart.png",
+    }
+    assert client.find_call == (
+        "compile ResNet\nsource overview",
+        {
+            "target_uri": "viking://resources/ara",
+            "context_type": "resource",
+            "limit": CompileLimits().target_catalog_pages,
+        },
+    )
     assert client.reads.count(("viking://resources/ara/Long.md", 128)) == 1
     assert client.reads.count(("viking://resources/ara/Long.md", -1)) == 1
     assert {uri for uri, _ in client.reads} == {
         "viking://resources/ara/Overview.md",
         "viking://resources/ara/PAPER.md",
-        "viking://resources/ara/broken.md",
         "viking://resources/ara/Long.md",
     }
+
+
+@pytest.mark.asyncio
+async def test_target_catalog_search_failure_keeps_collision_inventory():
+    class Client:
+        async def tree(self, uri, *, node_limit):
+            return [{"uri": f"{uri}/existing.md", "isDir": False, "size": 10}]
+
+        async def find(self, query, **kwargs):
+            raise RuntimeError("index unavailable")
+
+        async def read_raw(self, uri, *, offset=0, limit=-1):
+            raise AssertionError(f"unexpected content read: {uri}")
+
+    service = object.__new__(BotCompileService)
+    service.limits = CompileLimits()
+    catalog, inventory = await service._build_catalog(
+        Client(),
+        "viking://resources/wiki",
+        query="relevant",
+    )
+
+    assert catalog == []
+    assert set(inventory) == {"viking://resources/wiki/existing.md"}
 
 
 class _NamedTool(_EchoTool):

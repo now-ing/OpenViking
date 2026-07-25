@@ -8,6 +8,7 @@ import re
 import shlex
 import shutil
 import uuid
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, Mapping
@@ -81,7 +82,7 @@ _SKILL_EXCLUDED_FILES = frozenset(
 )
 _CATALOG_EXCLUDED_FILES = _SKILL_EXCLUDED_FILES | {"index.md", "log.md"}
 _CATALOG_FRONTMATTER_LINES = 128
-_CATALOG_READ_CONCURRENCY = 10
+_TARGET_CATALOG_QUERY_CHARS = 40_000
 _REQUIREMENT_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*$")
 
 
@@ -380,10 +381,46 @@ class BotCompileService:
             await self._set_state(task_id, status="running", stage="collecting_context")
             sources = await self._build_sources(client, request.from_)
             is_skill_target = classify_uri(request.to).context_type == "skill"
-            catalog = [] if is_skill_target else await self._build_catalog(client, request.to)
+            if is_skill_target:
+                catalog: list[dict[str, Any]] = []
+                target_inventory: dict[str, Mapping[str, Any]] = {}
+            else:
+                overviews = [
+                    str(source.get("overview") or "")
+                    for source in sources
+                    if source.get("overview")
+                ]
+                separator_chars = max(0, len(overviews) - 1) * 2
+                per_source_chars = (
+                    max(1, (_TARGET_CATALOG_QUERY_CHARS - separator_chars) // len(overviews))
+                    if overviews
+                    else 0
+                )
+                target_query = "\n\n".join(
+                    overview[:per_source_chars] for overview in overviews
+                )
+                catalog, target_inventory = await self._build_catalog(
+                    client,
+                    request.to,
+                    query=target_query,
+                )
             catalog_uris = {item["uri"] for item in catalog if item.get("kind") == "wiki_page"}
-            file_catalog_uris = {item["uri"] for item in catalog}
+            file_catalog_uris = set(target_inventory)
             source_roots = {item["source_id"]: item["directory_uri"] for item in sources}
+
+            async def resolve_wiki_uri(uri: str) -> bool:
+                entry = target_inventory.get(uri)
+                if entry is None or not uri.casefold().endswith(".md"):
+                    return False
+                try:
+                    return (
+                        await self._read_target_page_type(client, uri, entry=entry)
+                        is not None
+                    )
+                except Exception as exc:
+                    raise ValueError(
+                        f'Could not classify existing target Markdown "{uri}": {exc}'
+                    ) from exc
 
             request_loop = AgentLoop(
                 bus=self.agent_loop.bus,
@@ -410,6 +447,7 @@ class BotCompileService:
                 source_ids=set(source_roots),
                 catalog_uris=catalog_uris,
                 file_catalog_uris=file_catalog_uris,
+                wiki_uri_resolver=resolve_wiki_uri,
             )
             if unavailable_tools:
                 logger.warning(
@@ -855,10 +893,17 @@ class BotCompileService:
         return sources
 
     async def _build_catalog(
-        self, client: VikingClient, target_uri: str
-    ) -> list[dict[str, Any]]:
-        entries = await client.tree(target_uri, node_limit=self.limits.target_catalog_pages + 1)
-        catalog_entries: list[tuple[Mapping[str, Any], str, str]] = []
+        self,
+        client: VikingClient,
+        target_uri: str,
+        *,
+        query: str,
+    ) -> tuple[list[dict[str, Any]], dict[str, Mapping[str, Any]]]:
+        entries = await client.tree(
+            target_uri,
+            node_limit=self.limits.target_inventory_entries + 1,
+        )
+        inventory: dict[str, Mapping[str, Any]] = {}
         for entry in entries:
             if not isinstance(entry, Mapping) or entry.get("isDir"):
                 continue
@@ -866,69 +911,107 @@ class BotCompileService:
             name = uri.rsplit("/", 1)[-1]
             if not uri or name.lower() in _CATALOG_EXCLUDED_FILES:
                 continue
-            catalog_entries.append((entry, uri, name))
-            if len(catalog_entries) > self.limits.target_catalog_pages:
+            inventory[uri] = entry
+            if len(inventory) > self.limits.target_inventory_entries:
                 raise CompileFailure(
                     "RESOURCE_EXHAUSTED",
-                    "Target output catalog limit exceeded",
+                    "Target output inventory limit exceeded",
                     stage="collecting_context",
                 )
 
-        semaphore = asyncio.Semaphore(_CATALOG_READ_CONCURRENCY)
-
-        async def read_page_type(
-            entry: Mapping[str, Any], uri: str, name: str
-        ) -> str | None:
-            if not name.lower().endswith(".md"):
-                return None
-            try:
-                async with semaphore:
-                    prefix = await client.read_raw(
-                        uri, offset=0, limit=_CATALOG_FRONTMATTER_LINES
-                    )
-                    payload = prefix.encode("utf-8")
-                    if has_unclosed_frontmatter(payload):
-                        size = entry.get("size")
-                        if (
-                            isinstance(size, int)
-                            and size > self.limits.output_total_bytes
-                        ):
-                            return None
-                        payload = (await client.read_raw(uri)).encode("utf-8")
-                return validate_declared_okf_markdown(uri, payload)
-            except Exception as exc:
-                logger.warning(
-                    "Compile target catalog treated {} as an artifact: {}",
-                    uri,
-                    exc,
-                )
-                return None
-
-        page_types = await asyncio.gather(
-            *(
-                read_page_type(entry, uri, name)
-                for entry, uri, name in catalog_entries
+        if not inventory or not query.strip() or self.limits.target_catalog_pages <= 0:
+            return [], inventory
+        try:
+            result = await client.find(
+                query,
+                target_uri=target_uri,
+                context_type="resource",
+                limit=self.limits.target_catalog_pages,
             )
+        except Exception as exc:
+            logger.warning("Compile target relevance search failed: {}", exc)
+            return [], inventory
+
+        resources = (
+            result.get("resources", [])
+            if isinstance(result, Mapping)
+            else getattr(result, "resources", [])
         )
+        matches: list[tuple[str, Any]] = []
+        seen: set[str] = set()
+        for match in resources if isinstance(resources, list) else []:
+            uri = str(
+                match.get("uri") if isinstance(match, Mapping) else getattr(match, "uri", "")
+            ).rstrip("/")
+            if uri in inventory and uri not in seen:
+                matches.append((uri, match))
+                seen.add(uri)
+
         catalog: list[dict[str, Any]] = []
         page_count = 0
-        for (entry, uri, name), page_type in zip(
-            catalog_entries, page_types, strict=True
-        ):
+        for uri, match in matches:
+            entry = inventory[uri]
+            name = uri.rsplit("/", 1)[-1]
+            page_type = None
+            if name.casefold().endswith(".md"):
+                try:
+                    page_type = await self._read_target_page_type(
+                        client,
+                        uri,
+                        entry=entry,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Compile target catalog treated {} as an artifact: {}",
+                        uri,
+                        exc,
+                    )
             is_page = page_type is not None
             if is_page:
                 page_count += 1
+            match_summary = (
+                match.get("abstract") or match.get("overview")
+                if isinstance(match, Mapping)
+                else getattr(match, "abstract", None) or getattr(match, "overview", None)
+            )
             item = {
                 "uri": uri,
                 "kind": "wiki_page" if is_page else "file",
                 "title": name.removesuffix(".md") if is_page else name,
                 "type": page_type or str(entry.get("type") or ""),
-                "summary": str(entry.get("abstract") or entry.get("summary") or ""),
+                "summary": str(
+                    match_summary
+                    or entry.get("abstract")
+                    or entry.get("summary")
+                    or ""
+                ),
             }
             if is_page:
                 item["page_id"] = page_count
             catalog.append(item)
-        return catalog
+        return catalog, inventory
+
+    async def _read_target_page_type(
+        self,
+        client: VikingClient,
+        uri: str,
+        *,
+        entry: Mapping[str, Any],
+    ) -> str | None:
+        prefix = await client.read_raw(
+            uri,
+            offset=0,
+            limit=_CATALOG_FRONTMATTER_LINES,
+        )
+        payload = prefix.encode("utf-8")
+        if has_unclosed_frontmatter(payload):
+            size = entry.get("size")
+            if isinstance(size, int) and size > self.limits.output_total_bytes:
+                raise ValueError(
+                    "frontmatter exceeds the bounded Compile inspection size"
+                )
+            payload = (await client.read_raw(uri)).encode("utf-8")
+        return validate_declared_okf_markdown(uri, payload)
 
     async def _connect_mcp_if_needed(
         self, request_loop: AgentLoop, parsed_skill: Mapping[str, Any]
@@ -949,6 +1032,7 @@ class BotCompileService:
         source_ids: set[str],
         catalog_uris: set[str],
         file_catalog_uris: set[str] | None = None,
+        wiki_uri_resolver: Callable[[str], Awaitable[bool]] | None = None,
     ) -> tuple[ToolRegistry, set[str], list[str]]:
         available = set(request_loop.tools.tool_names)
         declared = bool(parsed_skill.get("allowed_tools_declared"))
@@ -1009,6 +1093,7 @@ class BotCompileService:
                 limits=self.limits,
                 require_workspace_files=registry.has("write_file"),
                 require_workspace_pages=registry.has("write_file"),
+                wiki_uri_resolver=wiki_uri_resolver,
             )
         )
         return registry, ov_names, sorted(set(unavailable))
@@ -1086,13 +1171,15 @@ Selected Skill:
             [
                 f"Task reason:\n{request.reason}",
                 "Source directories (data):\n" + json.dumps(sources, ensure_ascii=False),
-                "Target output catalog (data):\n" + json.dumps(catalog, ensure_ascii=False),
+                "Relevant target output catalog (data):\n"
+                + json.dumps(catalog, ensure_ascii=False),
                 (
                     "Inspect materials as needed. Before submitting, verify every output path and "
-                    "format explicitly required by the Skill. Every non-empty Wiki page must cite "
-                    "at least one supplied source. Update only matching catalog entries. Include "
-                    "every required artifact and no unrelated workspace files. Finish with the "
-                    "designated final submission tool."
+                    "format explicitly required by the Skill. The target catalog is a relevance-"
+                    "ranked subset; use the scoped list/read tools to inspect other existing target "
+                    "paths before choosing create versus update. Every non-empty Wiki page must "
+                    "cite at least one supplied source. Include every required artifact and no "
+                    "unrelated workspace files. Finish with the designated final submission tool."
                 ),
             ]
         )
