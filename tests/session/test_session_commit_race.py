@@ -193,6 +193,85 @@ class TestCommitRace:
 
         assert result.get("archived") is True
 
+    async def test_stale_append_meta_save_preserves_concurrent_config_patch(
+        self, client: AsyncOpenViking
+    ):
+        """A stale append must not overwrite a concurrently saved auto-commit policy."""
+        ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+        session_id = "race_test_patch_policy_survives_stale_append"
+        service = client._client._service.sessions
+        created = await service.create(ctx, session_id=session_id)
+
+        stale_appender = service.session(ctx, session_id)
+        await stale_appender.load()
+        assert stale_appender.meta.auto_commit_policy is None
+
+        updater = service.session(ctx, session_id)
+        await updater.load()
+        patched = await service.update_session_config(
+            updater,
+            {"auto_commit_policy": {"message_count_threshold": 1}},
+        )
+        assert patched["auto_commit_policy"]["message_count_threshold"] == 1
+
+        # Model the interleaving where this stale appender already decided that
+        # the persisted policy was None before the PATCH reached disk.
+        stale_appender._should_use_auto_commit_append_lock = lambda: False
+        stale_appender.add_message("user", [TextPart("Message from stale appender")])
+
+        reloaded = service.session(ctx, session_id)
+        await reloaded.load()
+        assert reloaded.meta.auto_commit_policy is not None
+
+    async def test_append_meta_save_does_not_overwrite_patch_between_read_and_write(
+        self, client: AsyncOpenViking
+    ):
+        """Append meta RMW must share the config PATCH lock boundary."""
+        ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+        session_id = "race_test_patch_policy_survives_append_meta_rmw"
+        service = client._client._service.sessions
+        await service.create(ctx, session_id=session_id)
+
+        stale_appender = service.session(ctx, session_id)
+        await stale_appender.load()
+        stale_appender.add_message("user", [TextPart("Message before delayed meta save")])
+
+        read_done = asyncio.Event()
+        allow_save = asyncio.Event()
+        original_read_latest = stale_appender._read_latest_meta_or_current
+
+        async def delayed_read_latest_meta():
+            latest = await original_read_latest()
+            read_done.set()
+            await allow_save.wait()
+            return latest
+
+        stale_appender._read_latest_meta_or_current = delayed_read_latest_meta
+        save_task = asyncio.create_task(
+            stale_appender._save_append_meta_preserving_latest_config()
+        )
+        await read_done.wait()
+
+        updater = service.session(ctx, session_id)
+        await updater.load()
+        patch_task = asyncio.create_task(
+            service.update_session_config(
+                updater,
+                {"auto_commit_policy": {"message_count_threshold": 1}},
+            )
+        )
+        await asyncio.sleep(0.05)
+        allow_save.set()
+        await save_task
+        patched = await patch_task
+
+        assert patched["auto_commit_policy"]["message_count_threshold"] == 1
+        reloaded = service.session(ctx, session_id)
+        await reloaded.load()
+        assert reloaded.meta.auto_commit_policy is not None
+        assert reloaded.meta.auto_commit_policy["message_count_threshold"] == 1
+        assert len(reloaded.messages) == 1
+
     async def test_commit_reloads_authoritative_messages_under_lock(
         self, client: AsyncOpenViking
     ):

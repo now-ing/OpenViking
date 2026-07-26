@@ -542,6 +542,32 @@ async def test_create_session_uses_default_policy_when_server_default_enabled(
     }
 
 
+async def test_auto_created_session_uses_default_policy_when_server_default_enabled(
+    client: httpx.AsyncClient,
+    service,
+):
+    service.sessions.set_session_auto_commit_config(
+        SessionAutoCommitConfig(default_enabled=True)
+    )
+    session_id = "auto-created-default-policy"
+
+    add_resp = await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json={"role": "user", "content": "create this session by writing first"},
+    )
+    assert add_resp.status_code == 200
+
+    session_resp = await client.get(f"/api/v1/sessions/{session_id}")
+    assert session_resp.status_code == 200
+    assert session_resp.json()["result"]["config"]["auto_commit_policy"] == {
+        "pending_token_threshold": 10000,
+        "message_count_threshold": 50,
+        "idle_timeout_seconds": 86400,
+        "keep_recent_count": 2,
+        "min_commit_interval_seconds": 0,
+    }
+
+
 async def test_create_session_applies_config_and_fills_defaults(client: httpx.AsyncClient):
     resp = await client.post(
         "/api/v1/sessions",

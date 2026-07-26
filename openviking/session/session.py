@@ -1244,7 +1244,7 @@ class Session:
             save_meta_under_lock=use_session_lock,
         )
         if not use_session_lock:
-            self._save_meta_sync()
+            self._save_append_meta_preserving_latest_config_sync()
 
     def _should_use_auto_commit_append_lock(self) -> bool:
         """Return True when the latest persisted session config uses auto commit."""
@@ -3765,9 +3765,12 @@ class Session:
         from openviking.storage.transaction import LockContext, get_lock_manager
 
         session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
+        meta_path = self._viking_fs._uri_to_path(
+            f"{self._session_uri}/.meta.json", ctx=self.ctx
+        )
         async with LockContext(
             get_lock_manager(),
-            [session_path],
+            [session_path, meta_path],
             lock_mode="exact",
             timeout=_COMMIT_BOUNDARY_META_LOCK_TIMEOUT_SECONDS,
         ):
@@ -3839,9 +3842,12 @@ class Session:
         from openviking.storage.transaction import LockContext, get_lock_manager
 
         session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
+        meta_path = self._viking_fs._uri_to_path(
+            f"{self._session_uri}/.meta.json", ctx=self.ctx
+        )
         async with LockContext(
             get_lock_manager(),
-            [session_path],
+            [session_path, meta_path],
             lock_mode="exact",
             timeout=_COMMIT_BOUNDARY_META_LOCK_TIMEOUT_SECONDS,
         ):
@@ -3887,6 +3893,28 @@ class Session:
         last_message_at: str,
     ) -> None:
         """Merge auto-append metadata from the lock-protected persisted state."""
+        from openviking.storage.transaction import LockContext, get_lock_manager
+
+        meta_path = self._viking_fs._uri_to_path(
+            f"{self._session_uri}/.meta.json", ctx=self.ctx
+        )
+        async with LockContext(
+            get_lock_manager(),
+            [meta_path],
+            lock_mode="exact",
+            timeout=_COMMIT_BOUNDARY_META_LOCK_TIMEOUT_SECONDS,
+        ):
+            await self._save_auto_append_meta_from_authoritative_state_unlocked(
+                appended_count,
+                last_message_at,
+            )
+
+    async def _save_auto_append_meta_from_authoritative_state_unlocked(
+        self,
+        appended_count: int,
+        last_message_at: str,
+    ) -> None:
+        """Merge auto-append metadata while the meta lock is already held."""
         latest_meta = await self._read_latest_meta_or_current()
         latest_messages = await self._read_live_messages()
 
@@ -3906,6 +3934,54 @@ class Session:
             self._meta.last_message_at = last_message_at
         self._rebuild_pending_tokens()
         await self._save_meta()
+
+    def _save_append_meta_preserving_latest_config_sync(self) -> None:
+        """Persist append counters without clobbering concurrent config updates."""
+        if not self._viking_fs:
+            return
+        run_async(self._save_append_meta_preserving_latest_config())
+
+    async def _save_append_meta_preserving_latest_config(self) -> None:
+        appended_last_message_at = self._meta.last_message_at
+        appended_total_message_count = self._meta.total_message_count
+        appended_message_count = self._meta.message_count
+        appended_pending_tokens = self._meta.pending_tokens
+
+        from openviking.storage.transaction import LockContext, get_lock_manager
+
+        meta_path = self._viking_fs._uri_to_path(
+            f"{self._session_uri}/.meta.json", ctx=self.ctx
+        )
+        async with LockContext(
+            get_lock_manager(),
+            [meta_path],
+            lock_mode="exact",
+            timeout=_COMMIT_BOUNDARY_META_LOCK_TIMEOUT_SECONDS,
+        ):
+            latest_meta = await self._read_latest_meta_or_current()
+
+            self._meta = latest_meta
+            self._meta.message_count = max(
+                int(self._meta.message_count or 0),
+                int(appended_message_count or 0),
+            )
+            self._meta.pending_tokens = max(
+                int(self._meta.pending_tokens or 0),
+                int(appended_pending_tokens or 0),
+            )
+            if self._meta.total_message_count is not None:
+                self._meta.total_message_count = max(
+                    int(self._meta.total_message_count or 0),
+                    int(appended_total_message_count or 0),
+                    int(self._meta.message_count or 0),
+                )
+            if appended_last_message_at and (
+                not self._meta.last_message_at
+                or self._meta.last_message_at < appended_last_message_at
+            ):
+                self._meta.last_message_at = appended_last_message_at
+
+            await self._save_meta()
 
     def _extract_abstract_from_summary(self, summary: str) -> str:
         """Extract one-sentence overview from structured summary."""

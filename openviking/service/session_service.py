@@ -219,6 +219,8 @@ class SessionService:
             if not await session.exists():
                 if not auto_create:
                     raise NotFoundError(session_id, "session")
+                if self._session_auto_commit_config.default_enabled:
+                    session.meta.auto_commit_policy = AutoCommitPolicy.from_dict(None).to_dict()
                 await session.ensure_exists()
             await session.load()
             self._record_lifecycle_metric("get", "ok")
@@ -425,11 +427,25 @@ class SessionService:
         only configurable section is ``auto_commit_policy``.
         """
         config_patch = config_patch or {}
-        if "auto_commit_policy" in config_patch:
+        if "auto_commit_policy" not in config_patch:
+            return self.effective_session_config(session)
+
+        from openviking.storage.transaction import LockContext, get_lock_manager
+
+        meta_path = session._viking_fs._uri_to_path(
+            f"{session.uri}/.meta.json", ctx=session.ctx
+        )
+        async with LockContext(
+            get_lock_manager(),
+            [meta_path],
+            lock_mode="exact",
+            timeout=30.0,
+        ):
+            session._meta = await session._read_latest_meta_or_current()
             current = AutoCommitPolicy.from_dict(session.meta.auto_commit_policy)
             merged = current.merge(config_patch.get("auto_commit_policy"))
             session.meta.auto_commit_policy = merged.to_dict()
-        await session._save_meta()
+            await session._save_meta()
         return self.effective_session_config(session)
 
     @staticmethod
