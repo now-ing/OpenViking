@@ -84,6 +84,7 @@ _CATALOG_EXCLUDED_FILES = _SKILL_EXCLUDED_FILES | {"index.md", "log.md"}
 _CATALOG_FRONTMATTER_LINES = 128
 _TARGET_CATALOG_QUERY_CHARS = 40_000
 _REQUIREMENT_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*$")
+_WIKI_SEARCH_TAG = "ov.kind=wiki"
 
 
 class BotCompileService:
@@ -569,14 +570,25 @@ class BotCompileService:
                 raise CompileFailure("AGENT_OUTPUT_INVALID", str(exc), stage="rendering") from exc
 
             batch_result: dict[str, Any] = {"created": [], "updated": [], "unchanged": []}
-            if rendered.operations:
-                await self._set_state(task_id, status="committing", stage="writing")
+            if rendered.operations or rendered.wiki_uris:
                 try:
-                    batch_result = await client.batch_write(
-                        root_uri=request.to,
-                        operations=rendered.operations,
-                        wait=True,
-                        timeout=min(300.0, self.limits.task_runtime_seconds),
+                    if rendered.operations:
+                        await self._set_state(
+                            task_id,
+                            status="committing",
+                            stage="writing",
+                        )
+                        batch_result = await client.batch_write(
+                            root_uri=request.to,
+                            operations=rendered.operations,
+                            wait=True,
+                            timeout=min(300.0, self.limits.task_runtime_seconds),
+                        )
+                    await self._set_state(task_id, status="committing", stage="refreshing")
+                    await self._tag_wiki_files(
+                        client,
+                        rendered.wiki_uris,
+                        target_uri=request.to,
                     )
                 except OpenVikingError as exc:
                     if exc.code == "CONFLICT":
@@ -592,7 +604,6 @@ class BotCompileService:
                         code = "WRITE_FAILED"
                         stage = "writing"
                     raise CompileFailure(code, str(exc), stage=stage) from exc
-                await self._set_state(task_id, status="committing", stage="refreshing")
 
             created = list(dict.fromkeys(batch_result.get("created", rendered.created)))
             updated = list(dict.fromkeys(batch_result.get("updated", rendered.updated)))
@@ -630,6 +641,39 @@ class BotCompileService:
             if client is not None:
                 await client.close()
             shutil.rmtree(workspace_parent, ignore_errors=True)
+
+    @staticmethod
+    async def _tag_wiki_files(
+        client: VikingClient,
+        uris: list[str],
+        *,
+        target_uri: str,
+    ) -> None:
+        unique_uris = list(dict.fromkeys(uris))
+        results = await asyncio.gather(
+            *(client.client.set_tags(uri, [_WIKI_SEARCH_TAG], mode="append") for uri in unique_uris),
+            return_exceptions=True,
+        )
+        failures = {}
+        for uri, result in zip(unique_uris, results, strict=True):
+            if isinstance(result, BaseException):
+                failures[uri] = str(result) or type(result).__name__
+            elif not result.get("tags_updated"):
+                failures[uri] = "indexed record was not found"
+        if failures:
+            reindex = (
+                "ov reindex"
+                if classify_uri(target_uri).scope == "user"
+                else "ov --sudo reindex"
+            )
+            raise OpenVikingError(
+                f"Wiki retrieval tags could not be applied to {len(failures)} file(s). "
+                "Content was written successfully. Resolve the reported index/tag error and "
+                "rerun the same ov compile command. If vector records are missing, first run "
+                f"`{reindex} {shlex.quote(target_uri)} --mode vectors_only --wait true`.",
+                code="REFRESH_FAILED",
+                details={"failures": failures},
+            )
 
     async def _materialize_skill(
         self,

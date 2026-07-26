@@ -92,6 +92,7 @@ def test_compile_bundle_schema_distinguishes_wiki_pages_and_artifact_files():
     assert "known source URIs" in page_properties["body_markdown"]["description"]
     assert "task workspace" in page_properties["body_workspace_path"]["description"]
     assert "reader-oriented" in page_properties["body_workspace_path"]["description"]
+    assert "filename derives from title" in page_properties["path_hint"]["description"]
     assert "source catalog entries" in page_properties["body_workspace_path"]["description"]
     assert "supplied source roots" in page_properties["source_ids"]["description"]
 
@@ -264,6 +265,10 @@ def test_renderer_creates_okf_pages_links_and_citations():
         "viking://resources/wiki/alpha.md",
         "viking://resources/wiki/beta.md",
     ]
+    assert rendered.wiki_uris == [
+        "viking://resources/wiki/alpha.md",
+        "viking://resources/wiki/beta.md",
+    ]
     assert rendered.link_count == 1
     first = rendered.operations[0]
     assert first["precondition"] == {"kind": "create_if_absent"}
@@ -358,6 +363,7 @@ def test_renderer_adds_raw_text_and_workspace_binary_to_same_bundle():
         "viking://resources/wiki/trace/exploration_tree.yaml",
         "viking://resources/wiki/evidence/figures/figure1.png",
     ]
+    assert rendered.wiki_uris == ["viking://resources/wiki/overview.md"]
 
 
 def test_renderer_accepts_minimal_okf_artifact_with_unknown_fields():
@@ -382,6 +388,56 @@ def test_renderer_accepts_minimal_okf_artifact_with_unknown_fields():
     )
 
     assert rendered.operations[0]["content"] == content
+    assert rendered.wiki_uris == ["viking://resources/wiki/research.md"]
+
+
+@pytest.mark.asyncio
+async def test_compile_appends_wiki_search_tag_once_per_uri():
+    class Client:
+        def __init__(self):
+            self.calls = []
+
+        async def set_tags(self, uri, tags, mode):
+            self.calls.append((uri, tags, mode))
+            return {"tags_updated": True}
+
+    raw_client = Client()
+    client = SimpleNamespace(client=raw_client)
+
+    await BotCompileService._tag_wiki_files(
+        client,
+        ["viking://resources/wiki/a.md", "viking://resources/wiki/a.md"],
+        target_uri="viking://resources/wiki",
+    )
+
+    assert raw_client.calls == [("viking://resources/wiki/a.md", ["ov.kind=wiki"], "append")]
+
+
+@pytest.mark.asyncio
+async def test_compile_collects_all_wiki_search_tag_failures():
+    class Client:
+        async def set_tags(self, uri, tags, mode):
+            del tags, mode
+            if uri.endswith("a.md"):
+                raise OpenVikingError("tag service unavailable", code="UNAVAILABLE")
+            return {"tags_updated": False}
+
+    with pytest.raises(OpenVikingError, match="Content was written successfully") as exc:
+        await BotCompileService._tag_wiki_files(
+            SimpleNamespace(client=Client()),
+            ["viking://resources/wiki/a.md", "viking://resources/wiki/b.md"],
+            target_uri="viking://resources/wiki",
+        )
+
+    assert exc.value.code == "REFRESH_FAILED"
+    assert exc.value.details["failures"] == {
+        "viking://resources/wiki/a.md": "tag service unavailable",
+        "viking://resources/wiki/b.md": "indexed record was not found",
+    }
+    assert (
+        "ov --sudo reindex viking://resources/wiki --mode vectors_only --wait true"
+        in str(exc.value)
+    )
 
 
 @pytest.mark.parametrize(

@@ -49,6 +49,7 @@ class RenderedBundle:
     created: list[str] = field(default_factory=list)
     updated: list[str] = field(default_factory=list)
     unchanged: list[str] = field(default_factory=list)
+    wiki_uris: list[str] = field(default_factory=list)
     link_count: int = 0
 
 
@@ -464,6 +465,7 @@ class WikiRenderer:
         total_bytes = 0
         for page in bundle.pages:
             uri = page_uris[page.page_id][0]
+            result.wiki_uris.append(uri)
             is_update = page.update_uri is not None
             old_raw = existing_raw.get(uri, "")
             if memory_target and is_update:
@@ -557,6 +559,8 @@ class WikiRenderer:
                 raise ValueError("Wiki bundle exceeds the final content size limit")
             if target_type == "resource":
                 page_type = validate_declared_okf_markdown(uri, candidate)
+                if page_type is not None:
+                    result.wiki_uris.append(uri)
                 if file.update_uri and uri in catalog_uris and page_type is None:
                     raise ValueError(
                         "an existing Wiki page updated as a raw file must retain "

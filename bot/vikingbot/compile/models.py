@@ -85,7 +85,13 @@ class WikiPageDraft(BaseModel):
         description="Identifiers of supplied source roots that support this Wiki page."
     )
     tags: list[str] = Field(default_factory=list)
-    path_hint: str | None = None
+    path_hint: str | None = Field(
+        default=None,
+        description=(
+            "Optional relative path for a new Wiki page. Omit by default so its filename "
+            "derives from title; use only for Skill-required paths and avoid generic basenames."
+        ),
+    )
     update_uri: str | None = None
 
     @model_validator(mode="after")
