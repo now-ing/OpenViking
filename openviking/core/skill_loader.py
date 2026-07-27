@@ -83,7 +83,7 @@ class SkillLoader:
         allowed_tools = meta.get("allowed-tools", [])
         allowed_tools = cls._normalize_allowed_tools(allowed_tools)
 
-        return {
+        skill = {
             "name": meta["name"],
             "description": meta["description"],
             "content": body.strip(),
@@ -92,6 +92,9 @@ class SkillLoader:
             "allowed_tools_declared": allowed_tools_declared,
             "tags": meta.get("tags", []),
         }
+        if "metadata" in meta:
+            skill["metadata"] = meta["metadata"]
+        return skill
 
     @classmethod
     def _split_frontmatter(cls, content: str) -> Tuple[Optional[str], str]:
@@ -121,6 +124,8 @@ class SkillLoader:
         tags = skill_dict.get("tags") or []
         if tags:
             frontmatter["tags"] = tags
+        if "metadata" in skill_dict:
+            frontmatter["metadata"] = skill_dict["metadata"]
 
         yaml_str = yaml.dump(frontmatter, allow_unicode=True, sort_keys=False)
 

@@ -560,3 +560,18 @@ def test_skill_loader_to_skill_md_round_trip_with_lists():
         "allowed_tools_declared": True,
         "tags": ["session-derived"],
     }
+
+
+def test_skill_loader_preserves_metadata():
+    skill_md = SkillLoader.to_skill_md(
+        {
+            "name": "lark-ov-compile-progress",
+            "description": "Track OV Compile progress",
+            "content": "Use lark-cli.",
+            "metadata": {"vikingbot": {"requires": {"bins": ["lark-cli"]}}},
+        }
+    )
+
+    assert SkillLoader.parse(skill_md)["metadata"] == {
+        "vikingbot": {"requires": {"bins": ["lark-cli"]}}
+    }
