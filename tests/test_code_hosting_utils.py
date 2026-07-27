@@ -22,7 +22,18 @@ def _mock_config():
                 "ssh.dev.azure.com",
                 "vs-ssh.visualstudio.com",
             ],
-            code_hosting_domains=["github.com", "gitlab.com"],
+            code_hosting_domains=[
+                "github.com",
+                "gitlab.com",
+                "gitcode.com",
+                "gitee.com",
+                "bitbucket.org",
+                "codeberg.org",
+                "gitea.com",
+                "jihulab.com",
+                "atomgit.com",
+                "git.sr.ht",
+            ],
         )
     )
 
@@ -281,7 +292,10 @@ def test_is_git_repo_url_https_blob():
 
 
 def test_is_git_repo_url_github_tree_path_with__git_segment():
-    assert is_git_repo_url("https://github.com/org/repo/tree/main/_git/config") is False
+    # A _git segment inside a GitHub tree path must not trigger the Azure
+    # rule (see the parse_code_hosting_url counterpart test). The URL itself
+    # is a valid subdirectory browse of org/repo, hence a repo URL.
+    assert is_git_repo_url("https://github.com/org/repo/tree/main/_git/config") is True
 
 
 def test_is_git_repo_url_unknown_domain():
@@ -290,3 +304,201 @@ def test_is_git_repo_url_unknown_domain():
 
 def test_is_git_repo_url_single_segment():
     assert is_git_repo_url("https://github.com/org") is False
+
+
+# --- is_git_repo_url: nested groups and .git clone URLs ---
+
+
+def test_is_git_repo_url_gitcode_nested_dotgit():
+    assert is_git_repo_url("https://gitcode.com/GitHub_Trending/bl/black.git") is True
+
+
+def test_is_git_repo_url_gitee_repo():
+    assert is_git_repo_url("https://gitee.com/mindspore/mindspore") is True
+
+
+def test_is_git_repo_url_gitee_tree():
+    assert is_git_repo_url("https://gitee.com/mindspore/mindspore/tree/master") is True
+
+
+def test_is_git_repo_url_gitlab_subgroup_dotgit():
+    assert is_git_repo_url("https://gitlab.com/org/subgroup/repo.git") is True
+
+
+def test_is_git_repo_url_gitlab_subgroup_without_dotgit_rejected():
+    # Ambiguous with subgroup pages; only .git or /-/ forms disambiguate
+    assert is_git_repo_url("https://gitlab.com/org/subgroup/repo") is False
+
+
+def test_is_git_repo_url_nested_repo_named_blob_dotgit():
+    # A nested repo literally named "blob" must not be taken as a browse page
+    assert is_git_repo_url("https://gitlab.com/org/subgroup/blob.git") is True
+
+
+def test_is_git_repo_url_dotgit_only_segment():
+    assert is_git_repo_url("https://github.com/org/.git") is False
+
+
+# --- is_git_repo_url: GitLab "/-/" browse URLs ---
+
+
+def test_is_git_repo_url_gitlab_dash_tree():
+    assert is_git_repo_url("https://gitlab.com/gitlab-org/gitlab/-/tree/master") is True
+
+
+def test_is_git_repo_url_gitlab_dash_tree_nested():
+    assert is_git_repo_url("https://gitlab.com/org/subgroup/repo/-/tree/main") is True
+
+
+def test_is_git_repo_url_gitlab_dash_commit_sha():
+    assert (
+        is_git_repo_url(
+            "https://gitlab.com/org/repo/-/commit/1234567890abcdef1234567890abcdef12345678"
+        )
+        is True
+    )
+
+
+def test_is_git_repo_url_gitlab_dash_issues():
+    assert is_git_repo_url("https://gitlab.com/org/repo/-/issues/1") is False
+
+
+def test_is_git_repo_url_gitlab_dash_blob():
+    assert is_git_repo_url("https://gitlab.com/org/repo/-/blob/main/file.py") is False
+
+
+# --- is_git_repo_url: commit pins and tree refs ---
+
+
+def test_is_git_repo_url_github_commit_sha():
+    assert is_git_repo_url("https://github.com/org/repo/commit/abc1234") is True
+
+
+def test_is_git_repo_url_github_commit_non_sha():
+    assert is_git_repo_url("https://github.com/org/repo/commit/not-a-sha") is False
+
+
+def test_is_git_repo_url_tree_ref_with_slash():
+    assert is_git_repo_url("https://github.com/org/repo/tree/feature/foo") is True
+
+
+def test_is_git_repo_url_tree_subdirectory():
+    assert is_git_repo_url("https://github.com/org/repo/tree/main/src") is True
+
+
+# --- is_git_repo_url: reserved platform pages ---
+
+
+def test_is_git_repo_url_reserved_topics():
+    assert is_git_repo_url("https://github.com/topics/python") is False
+
+
+def test_is_git_repo_url_reserved_orgs():
+    assert is_git_repo_url("https://github.com/orgs/volcengine") is False
+
+
+def test_is_git_repo_url_reserved_groups():
+    assert is_git_repo_url("https://gitlab.com/groups/gitlab-org") is False
+
+
+def test_is_git_repo_url_reserved_explore():
+    assert is_git_repo_url("https://gitee.com/explore/starred") is False
+
+
+def test_is_git_repo_url_azure_project_page():
+    # Azure DevOps project pages are not cloneable; only the _git form is
+    assert is_git_repo_url("https://dev.azure.com/org/project") is False
+
+
+# --- is_git_repo_url: ssh/git protocols require a repo path ---
+
+
+def test_is_git_repo_url_ssh_url_without_path():
+    assert is_git_repo_url("ssh://git@github.com/") is False
+
+
+def test_is_git_repo_url_git_at_without_path():
+    assert is_git_repo_url("git@github.com:") is False
+
+
+def test_is_git_repo_url_git_at_nested_dotgit():
+    assert is_git_repo_url("git@gitcode.com:GitHub_Trending/bl/black.git") is True
+
+
+# --- is_git_repo_url: additional default platforms ---
+
+
+def test_is_git_repo_url_bitbucket_repo():
+    assert is_git_repo_url("https://bitbucket.org/team/repo.git") is True
+
+
+def test_is_git_repo_url_bitbucket_src_browse_rejected():
+    # Bitbucket uses /src/<ref> for browsing; only repo/clone URLs are accepted
+    assert is_git_repo_url("https://bitbucket.org/team/repo/src/main/file.py") is False
+
+
+def test_is_git_repo_url_jihulab_dash_tree():
+    assert is_git_repo_url("https://jihulab.com/gitlab-cn/gitlab/-/tree/main") is True
+
+
+def test_is_git_repo_url_jihulab_subgroup_dotgit():
+    assert is_git_repo_url("https://jihulab.com/org/subgroup/repo.git") is True
+
+
+def test_is_git_repo_url_codeberg_repo():
+    assert is_git_repo_url("https://codeberg.org/forgejo/forgejo") is True
+
+
+def test_is_git_repo_url_atomgit_repo():
+    assert is_git_repo_url("https://atomgit.com/openharmony/docs.git") is True
+
+
+def test_is_git_repo_url_gitea_repo():
+    assert is_git_repo_url("https://gitea.com/gitea/tea") is True
+
+
+def test_is_git_repo_url_sourcehut_repo():
+    assert is_git_repo_url("https://git.sr.ht/~sircmpwn/aerc") is True
+
+
+def test_parse_code_hosting_url_sourcehut_tilde_sanitized():
+    assert parse_code_hosting_url("https://git.sr.ht/~sircmpwn/aerc") == "_sircmpwn/aerc"
+
+
+# --- parse_code_hosting_url: nested groups ---
+
+
+def test_parse_code_hosting_url_gitcode_nested_dotgit():
+    assert (
+        parse_code_hosting_url("https://gitcode.com/GitHub_Trending/bl/black.git")
+        == "GitHub_Trending/bl/black"
+    )
+
+
+def test_parse_code_hosting_url_gitlab_subgroup_dotgit():
+    assert parse_code_hosting_url("https://gitlab.com/org/subgroup/repo.git") == "org/subgroup/repo"
+
+
+def test_parse_code_hosting_url_gitlab_dash_tree_nested():
+    assert (
+        parse_code_hosting_url("https://gitlab.com/org/subgroup/repo/-/tree/main")
+        == "org/subgroup/repo"
+    )
+
+
+def test_parse_code_hosting_url_git_ssh_nested_dotgit():
+    assert (
+        parse_code_hosting_url("git@gitcode.com:GitHub_Trending/bl/black.git")
+        == "GitHub_Trending/bl/black"
+    )
+
+
+def test_parse_code_hosting_url_blob_file_named_dotgit_not_nested():
+    # org/repo/blob/main/file.git is a file browse URL, not a nested repo path
+    assert (
+        parse_code_hosting_url("https://github.com/org/repo/blob/main/file.git") == "org/repo"
+    )
+
+
+def test_parse_code_hosting_url_github_tree_unchanged():
+    assert parse_code_hosting_url("https://github.com/org/repo/tree/main") == "org/repo"

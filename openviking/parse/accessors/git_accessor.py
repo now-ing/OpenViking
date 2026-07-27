@@ -267,23 +267,33 @@ class GitAccessor(DataAccessor):
         return 7 <= len(ref) <= 40 and all(c in "0123456789abcdefABCDEF" for c in ref)
 
     def _normalize_repo_url(self, url: str) -> str:
-        """Normalize repository URL to base form."""
+        """Normalize repository URL to a cloneable base form."""
         if url.startswith(("http://", "https://", "git://", "ssh://")):
             parsed = urlparse(url)
             path_parts = [p for p in parsed.path.split("/") if p]
             base_parts = path_parts
-            git_index = next((i for i, p in enumerate(path_parts) if p.endswith(".git")), None)
-            if git_index is not None:
-                base_parts = path_parts[: git_index + 1]
 
             config = get_openviking_config()
-            if _domain_matches(parsed, getattr(config.code, "azure_devops_domains", [])):
+            dash_index = path_parts.index("-") if "-" in path_parts else -1
+            git_index = next((i for i, p in enumerate(path_parts) if p.endswith(".git")), None)
+
+            if dash_index >= 2:
+                # GitLab "/-/" browse separator: the (possibly nested) repo
+                # path is everything before it
+                base_parts = path_parts[:dash_index]
+            elif git_index is not None:
+                # Clone URL: keep the nested path through the .git segment
+                base_parts = path_parts[: git_index + 1]
+            elif _domain_matches(parsed, getattr(config.code, "azure_devops_domains", [])):
                 azure_repo_parts = _extract_azure_devops_repo_parts(path_parts)
                 if azure_repo_parts:
                     base_parts = path_parts[: len(azure_repo_parts) + 1]
-
-            if _domain_matches(parsed, config.code.github_domains + config.code.gitlab_domains):
+            elif len(path_parts) >= 3 and path_parts[2] in ("tree", "commit"):
+                # Browser URLs: owner/repo/tree/<ref>, owner/repo/commit/<sha>
                 base_parts = path_parts[:2]
+            elif _domain_matches(parsed, config.code.github_domains + config.code.gitlab_domains):
+                base_parts = path_parts[:2]
+
             base_path = "/" + "/".join(base_parts)
             return parsed._replace(path=base_path, query="", fragment="").geturl()
         return url

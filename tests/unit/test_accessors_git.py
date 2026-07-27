@@ -126,6 +126,38 @@ class TestGitAccessor:
     @pytest.mark.parametrize(
         "source",
         [
+            "https://gitlab.com/org/subgroup/repo.git",
+            "https://gitlab.com/org/subgroup/repo/-/tree/main",
+        ],
+    )
+    def test_can_handle_gitlab_nested_urls(self, accessor: GitAccessor, source: str) -> None:
+        """GitAccessor should handle GitLab subgroup clone URLs and /-/ tree URLs."""
+        assert accessor.can_handle(source) is True
+
+    def test_normalize_repo_url_gitlab_dash_tree(self, accessor: GitAccessor) -> None:
+        """Normalization must cut at the GitLab /-/ separator, keeping the nested path."""
+        assert (
+            accessor._normalize_repo_url("https://gitlab.com/org/subgroup/repo/-/tree/main")
+            == "https://gitlab.com/org/subgroup/repo"
+        )
+
+    def test_normalize_repo_url_gitlab_subgroup_dotgit(self, accessor: GitAccessor) -> None:
+        """Nested .git clone URLs must not be truncated to the first two segments."""
+        assert (
+            accessor._normalize_repo_url("https://gitlab.com/org/subgroup/repo.git")
+            == "https://gitlab.com/org/subgroup/repo.git"
+        )
+
+    def test_normalize_repo_url_github_commit_page(self, accessor: GitAccessor) -> None:
+        """Commit-pin URLs normalize to the bare repo; the ref is extracted separately."""
+        assert (
+            accessor._normalize_repo_url("https://github.com/org/repo/commit/abc1234")
+            == "https://github.com/org/repo"
+        )
+
+    @pytest.mark.parametrize(
+        "source",
+        [
             "/path/to/repo.git",
         ],
     )

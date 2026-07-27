@@ -38,12 +38,21 @@ def _get_allowed_code_hosting_domains() -> set[str]:
                 allowed.update(config.code.code_hosting_domains)
     except Exception:
         # If config can't be loaded, use defaults
+        # (keep in sync with CodeHostingConfig defaults in parser_config.py)
         allowed.update(
             {
                 "github.com",
                 "www.github.com",
                 "gitlab.com",
                 "www.gitlab.com",
+                "gitcode.com",
+                "gitee.com",
+                "bitbucket.org",
+                "codeberg.org",
+                "gitea.com",
+                "jihulab.com",
+                "atomgit.com",
+                "git.sr.ht",
                 "dev.azure.com",
                 "ssh.dev.azure.com",
                 "vs-ssh.visualstudio.com",
