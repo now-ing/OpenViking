@@ -9,7 +9,7 @@ operations object. ``ExtractLoop._recover_legacy_operations`` re-routes such
 items into the matching ``memory_type`` field so they are not silently dropped.
 """
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from openviking.session.memory.dataclass import MemoryField, MemoryTypeSchema
 from openviking.session.memory.extract_loop import ExtractLoop
