@@ -795,6 +795,24 @@ The final output of the model must strictly follow the JSON Schema format shown 
                     )
                     return (None, None)
 
+                # #3508: a non-conforming response (root JSON list or a legacy
+                # envelope like {"memories": [...]} / {"current_status": ...,
+                # "memories": [...]}) parses "successfully" but to an *empty*
+                # operation set, because the generic parser drops every key not
+                # in the dynamic top-level schema fields. Recover the memory
+                # items by routing them into the matching memory_type field so
+                # they are no longer silently lost. Conforming responses are
+                # unaffected: this only fires when the normal parse came back
+                # empty despite non-empty content.
+                if (
+                    operations is not None
+                    and callable(getattr(operations, "is_empty", None))
+                    and operations.is_empty()
+                ):
+                    recovered = self._recover_legacy_operations(content)
+                    if recovered is not None and not recovered.is_empty():
+                        operations = recovered
+
                 return (None, operations)
             except Exception as e:
                 logger.exception(f"Error parsing operations: {e}")
