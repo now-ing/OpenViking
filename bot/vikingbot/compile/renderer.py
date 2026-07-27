@@ -59,6 +59,11 @@ def content_hash(content: str | bytes) -> str:
     return "sha256:" + hashlib.sha256(content).hexdigest()
 
 
+def wiki_page_path_from_title(title: str) -> str:
+    title = re.sub(r"\s+[-–—]\s+", " ", title.strip())
+    return VikingURI.sanitize_segment(title)
+
+
 def _split_frontmatter(content: str) -> tuple[dict[str, Any], str]:
     match = _FRONTMATTER_RE.match(content or "")
     if not match:
@@ -278,7 +283,7 @@ def _render_citations(
         label = target.rstrip("/").rsplit("/", 1)[-1] or f"Source {source_id}"
         merged.append((label, target))
     lines = [f"[{index}] [{label}]({target})" for index, (label, target) in enumerate(merged, 1)]
-    return body.rstrip() + "\n\n# Citations\n\n" + "\n".join(lines) + "\n"
+    return body.rstrip() + "\n\n# Citations\n\n" + "  \n".join(lines) + "\n"
 
 
 def validate_relative_page_path(path: str) -> str:
@@ -405,7 +410,7 @@ class WikiRenderer:
                 if uri not in existing_raw:
                     raise ValueError(f"raw content was not loaded for update_uri: {uri}")
             else:
-                hint = page.path_hint or VikingURI.sanitize_segment(title)
+                hint = page.path_hint or wiki_page_path_from_title(title)
                 relative = validate_relative_page_path(hint)
                 uri = safe_join_viking_uri(target_uri, relative).rstrip("/")
                 if uri in file_catalog_uris:
@@ -597,4 +602,5 @@ __all__ = [
     "validate_declared_okf_markdown",
     "validate_relative_file_path",
     "validate_relative_page_path",
+    "wiki_page_path_from_title",
 ]

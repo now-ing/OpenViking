@@ -19,7 +19,6 @@ from openviking.utils.path_safety import (
 )
 from openviking.utils.skill_processor import validate_skill_name
 from openviking_cli.exceptions import OpenVikingError
-from openviking_cli.utils import VikingURI
 from vikingbot.agent.tools.base import Tool, ToolContext
 from vikingbot.compile.models import (
     COMPILE_STAGING_ROOT,
@@ -32,6 +31,7 @@ from vikingbot.compile.renderer import (
     validate_declared_okf_markdown,
     validate_relative_file_path,
     validate_relative_page_path,
+    wiki_page_path_from_title,
 )
 
 _LINK_FIELDS = frozenset({"f", "t", "link_type", "weight", "match_text", "description"})
@@ -511,7 +511,7 @@ class SubmitWikiBundleTool(Tool):
                 if page.path_hint:
                     raise ValueError(f"page {page.page_id} cannot rename an update")
             else:
-                hint = page.path_hint or VikingURI.sanitize_segment(page.title.strip())
+                hint = page.path_hint or wiki_page_path_from_title(page.title)
                 relative = validate_relative_page_path(hint)
                 final_uri = safe_join_viking_uri(self.target_uri, relative).rstrip("/")
                 if final_uri in self.file_catalog_uris:

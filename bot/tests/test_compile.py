@@ -18,7 +18,7 @@ from vikingbot.compile.models import (
     WikiBundleDraft,
     utc_now,
 )
-from vikingbot.compile.renderer import WikiRenderer, content_hash
+from vikingbot.compile.renderer import WikiRenderer, content_hash, wiki_page_path_from_title
 from vikingbot.compile.service import BotCompileService
 from vikingbot.compile.store import CompileTaskStore
 from vikingbot.config.schema import SessionKey
@@ -298,6 +298,14 @@ def test_renderer_creates_okf_pages_links_and_citations():
     assert "[1] [source](viking://resources/source)" in first["content"]
 
 
+def test_wiki_page_title_path_normalizes_spaced_dashes_only():
+    assert (
+        wiki_page_path_from_title("Experimental Designs - Residual Networks")
+        == "Experimental_Designs_Residual_Networks"
+    )
+    assert wiki_page_path_from_title("One-Page Overview") == "One-Page_Overview"
+
+
 def test_renderer_linkifies_source_uris_and_adds_resource_backlinks():
     source_detail = "viking://resources/source/chapter_1.md"
     outside = "viking://resources/outside/chapter.md"
@@ -337,6 +345,7 @@ def test_renderer_linkifies_source_uris_and_adds_resource_backlinks():
     assert outside in overview and f"]({outside})" not in overview
     assert f"[1] [chapter_1]({source_detail})" in overview
     assert "[2] [source](viking://resources/source)" in overview
+    assert f"[1] [chapter_1]({source_detail})  \n[2] [source]" in overview
     assert "## Related pages" in details
     assert "- [Overview](./overview.md)" in details
     assert rendered.link_count == 1
