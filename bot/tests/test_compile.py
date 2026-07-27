@@ -147,6 +147,26 @@ def test_submit_tool_schema_requires_workspace_page_bodies_when_available():
     assert "body_workspace_path" in page_schema["required"]
 
 
+@pytest.mark.parametrize(
+    "target_uri",
+    ["viking://resources/wiki", "viking://agent/skills"],
+)
+def test_submit_tool_schema_requires_workspace_artifacts_when_available(target_uri):
+    tool = SubmitWikiBundleTool(
+        source_ids={"src_1"},
+        catalog_uris=set(),
+        target_uri=target_uri,
+        limits=CompileLimits(),
+        require_workspace_files=True,
+    )
+
+    file_schema = tool.parameters["$defs"]["CompileFileDraft"]
+    assert "content" not in file_schema["properties"]
+    assert "workspace_path" in file_schema["required"]
+    assert "write_file or exec" in tool.description
+    assert "workspace_path instead of inline content" in tool.validate_params({"raw": "{}"})[0]
+
+
 @pytest.mark.asyncio
 async def test_submit_tool_accepts_only_one_complete_skill_package():
     tool = SubmitWikiBundleTool(
@@ -826,7 +846,7 @@ async def test_submit_tool_reports_all_invalid_links():
 
 
 @pytest.mark.asyncio
-async def test_submit_tool_requires_workspace_paths_for_multi_file_artifacts():
+async def test_submit_tool_requires_workspace_paths_for_artifacts():
     tool = SubmitWikiBundleTool(
         source_ids={"src_1"},
         catalog_uris=set(),
@@ -853,7 +873,7 @@ async def test_submit_tool_requires_workspace_paths_for_multi_file_artifacts():
     assert "must be generated with write_file" in result
     assert tool.bundle is None
 
-    accepted = await tool.execute(
+    single_inline = await tool.execute(
         ToolContext(),
         pages=[],
         files=[
@@ -863,9 +883,16 @@ async def test_submit_tool_requires_workspace_paths_for_multi_file_artifacts():
             }
         ],
     )
-    assert accepted == "Wiki bundle accepted with 0 page(s) and 1 file(s)."
+    assert single_inline.startswith("Error: Invalid Wiki bundle:")
+    assert "submitted using workspace_path instead of inline content" in single_inline
 
-    rejected = await tool.execute(
+    inline_tool = SubmitWikiBundleTool(
+        source_ids={"src_1"},
+        catalog_uris=set(),
+        target_uri="viking://resources/wiki",
+        limits=CompileLimits(),
+    )
+    rejected = await inline_tool.execute(
         ToolContext(),
         pages=[],
         files=[{"path": "concept.md", "content": "---\ntype: ''\n---\n"}],
@@ -1511,7 +1538,6 @@ async def test_execute_skill_target_skips_recursive_catalog_and_completes(
     def build_registry(
         request_loop,
         *,
-        parsed_skill,
         roots,
         target_uri,
         source_ids,
@@ -1520,7 +1546,7 @@ async def test_execute_skill_target_skips_recursive_catalog_and_completes(
         workspace_baseline,
         wiki_uri_resolver,
     ):
-        del request_loop, parsed_skill, roots, source_ids
+        del request_loop, roots, source_ids
         assert catalog_uris == set()
         assert file_catalog_uris == set()
         assert workspace_baseline is None
@@ -1535,7 +1561,7 @@ async def test_execute_skill_target_skips_recursive_catalog_and_completes(
                 limits=CompileLimits(),
             )
         )
-        return registry, set(), []
+        return registry, set()
 
     monkeypatch.setattr("vikingbot.compile.service.SandboxManager", FakeSandboxManager)
     monkeypatch.setattr("vikingbot.compile.service.SkillsLoader", FakeSkillsLoader)
@@ -1579,9 +1605,8 @@ async def test_execute_skill_target_skips_recursive_catalog_and_completes(
     service.store = Store(task)
     monkeypatch.setattr(service, "_materialize_skill", no_op)
     monkeypatch.setattr(service, "_check_requirements", no_op)
-    monkeypatch.setattr(service, "_connect_mcp_if_needed", no_op)
     monkeypatch.setattr(service, "_build_sources", build_sources)
-    monkeypatch.setattr(service, "_build_request_registry", build_registry)
+    monkeypatch.setattr(service, "_build_compile_registry", build_registry)
 
     await service._execute_task(task.task_id, request, {"api_key": "secret"})
 
@@ -1816,7 +1841,7 @@ class _NamedTool(_EchoTool):
         return self._name
 
 
-def test_request_registry_honors_allowed_tools_and_compile_blocklist():
+def test_compile_registry_has_a_fixed_ara_compatible_tool_set():
     available = ToolRegistry()
     for name in (
         "read_file",
@@ -1825,11 +1850,15 @@ def test_request_registry_honors_allowed_tools_and_compile_blocklist():
         "exec",
         "web_search",
         "message",
+        "cron",
+        "spawn",
         "openviking_list",
+        "openviking_search",
         "openviking_grep",
         "openviking_glob",
         "openviking_multi_read",
         "openviking_add_resource",
+        "openviking_memory_commit",
     ):
         available.register(_NamedTool(name))
     request_loop = SimpleNamespace(tools=available, config=None)
@@ -1843,99 +1872,34 @@ def test_request_registry_honors_allowed_tools_and_compile_blocklist():
         "catalog_uris": set(),
     }
 
-    empty, empty_ov_names, empty_unavailable = service._build_request_registry(
-        parsed_skill={"allowed_tools_declared": True, "allowed_tools": []},
-        **common,
-    )
-    assert empty.tool_names == [
-        "read_file",
-        "write_file",
-        "openviking_list",
-        "openviking_multi_read",
-        "submit_wiki_bundle",
-    ]
-    assert empty_ov_names == {"openviking_list", "openviking_multi_read"}
-    assert empty_unavailable == []
-
-    selected, ov_names, unavailable = service._build_request_registry(
-        parsed_skill={
-            "allowed_tools_declared": True,
-            "allowed_tools": [
-                "Read",
-                "WebSearch",
-                "openviking_list",
-                "message",
-                "openviking_add_resource",
-                "made_up_tool",
-            ],
-        },
-        **common,
-    )
-    assert selected.tool_names == [
-        "read_file",
-        "write_file",
-        "web_search",
-        "openviking_list",
-        "openviking_multi_read",
-        "submit_wiki_bundle",
-    ]
-    assert ov_names == {"openviking_list", "openviking_multi_read"}
-    assert unavailable == ["made_up_tool", "message", "openviking_add_resource"]
-
-    ara, ara_ov_names, ara_unavailable = service._build_request_registry(
-        parsed_skill={
-            "allowed_tools_declared": True,
-            "allowed_tools": [
-                "Read",
-                "Write",
-                "Edit",
-                "Bash(python *|git clone *|ls *|mkdir *)",
-                "Glob",
-                "Grep",
-                "Task",
-            ],
-        },
-        **common,
-    )
-    assert ara.tool_names == [
+    registry, ov_names = service._build_compile_registry(**common)
+    assert set(registry.tool_names) == {
         "read_file",
         "write_file",
         "edit_file",
+        "exec",
         "openviking_list",
+        "openviking_search",
         "openviking_grep",
         "openviking_glob",
         "openviking_multi_read",
         "submit_wiki_bundle",
-    ]
-    assert ara_ov_names == {
+    }
+    assert ov_names == {
         "openviking_list",
+        "openviking_search",
         "openviking_grep",
         "openviking_glob",
         "openviking_multi_read",
     }
-    assert ara_unavailable == [
-        "Bash(python *|git clone *|ls *|mkdir *)",
-        "Task",
-    ]
-    assert ara.get("submit_wiki_bundle").require_workspace_files is True
-    assert ara.get("submit_wiki_bundle").require_workspace_pages is True
-    assert empty.get("submit_wiki_bundle").require_workspace_files is True
-    assert empty.get("submit_wiki_bundle").require_workspace_pages is True
-
-    lowercase, lowercase_ov_names, lowercase_unavailable = service._build_request_registry(
-        parsed_skill={
-            "allowed_tools_declared": True,
-            "allowed_tools": ["glob", "grep"],
-        },
-        **common,
-    )
-    assert "openviking_glob" in lowercase.tool_names
-    assert "openviking_grep" in lowercase.tool_names
-    assert {"openviking_glob", "openviking_grep"} <= lowercase_ov_names
-    assert lowercase_unavailable == []
+    assert registry.tool_names[-1] == "submit_wiki_bundle"
+    assert all(isinstance(registry.get(name), CompileScopedTool) for name in ov_names)
+    submit = registry.get("submit_wiki_bundle")
+    assert submit.require_workspace_files is True
+    assert submit.require_workspace_pages is True
 
 
-def test_compile_prompt_explains_unavailable_tools_to_agent_only():
+def test_compile_prompt_routes_skill_cli_commands_through_exec():
     request = SanitizedCompileRequest.model_validate(
         {
             "from": ["viking://resources/source"],
@@ -1950,19 +1914,19 @@ def test_compile_prompt_explains_unavailable_tools_to_agent_only():
         skill_content="Follow the ARA method.",
         sources=[],
         catalog=[],
-        available_tools=["read_file", "submit_wiki_bundle"],
-        unavailable_tools=["Bash(...)", "Glob", "Grep", "Task"],
     )
 
-    assert "Compile host capability notice" in system
-    assert '"Bash(...)"' in system
-    assert "Do not claim that unavailable validation or generation steps" in system
+    assert "When the Skill asks to run Bash, shell commands, or a CLI, use the exec tool." in system
+    assert "Generate every artifact file in the task workspace with write_file or exec" in system
+    assert "submit_wiki_bundle using workspace_path" in system
+    assert "never inline artifact content" in system
+    assert "Compile host capability notice" not in system
     assert "Preserve every required output type, path, and format" in system
     assert "preserve Skill-prescribed artifact file trees as exact files" in system
     assert "bundle.links" not in system
     assert "match_text" not in system
     assert "pages=[]" not in system
-    assert "workspace_path" not in system
+    assert "body_workspace_path" in system
     assert "__compile_staging__/wiki_pages/" in system
     assert "__compile_staging__/tmp/" in system
     assert "use its URI as an ordinary Markdown link" in system
@@ -1992,10 +1956,11 @@ def test_compile_prompt_requires_one_complete_skill_package_for_skill_target():
         skill_content="Create a standards-compliant Skill.",
         sources=[],
         catalog=[],
-        available_tools=["write_file", "submit_wiki_bundle"],
-        unavailable_tools=[],
     )
 
+    assert "When the Skill asks to run Bash, shell commands, or a CLI, use the exec tool." in system
+    assert "Generate every artifact file in the task workspace with write_file or exec" in system
+    assert "submit_wiki_bundle using workspace_path" in system
     assert "exactly one complete Skill package as artifact files" in system
     assert "<skill-name>/SKILL.md" in system
     assert "Do not produce Wiki pages, links" in system

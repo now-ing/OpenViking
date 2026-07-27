@@ -317,18 +317,15 @@ catalog 只保存目录项和 L0/L1 可得的轻量信息，不为了计算 hash
 `request_tools` 从 `register_default_tools()` 创建的 task-local registry 中筛选：
 
 ```text
-available_tools = 已注册工具 ∩ Bot 运行策略 ∩ Compile 允许能力
-core_read_tools = available_tools ∩ {read_file, openviking_list, openviking_multi_read}
-skill_tools = available_tools ∩ normalize(skill.allowed-tools)  # 声明时
-skill_tools = available_tools                                  # 未声明时
-request_tools = (core_read_tools ∪ skill_tools) - Compile 禁用工具 + submit_wiki_bundle
+compile_tools = available_tools ∩ (_COMPILE_CORE_TOOLS ∪ _OV_READ_TOOLS)
+request_tools = compile_tools + submit_wiki_bundle
 ```
 
-`read_file`、`openviking_list` 和 `openviking_multi_read` 是 Compile 核心读取工具，不受 Skill `allowed-tools` 筛选，但仍受 Bot policy、task workspace、OpenViking 用户权限和 Compile URI scope 限制。`allowed-tools` 必须是字符串数组；显式 `allowed-tools: []` 表示除这三个核心读取工具和 `submit_wiki_bundle` 外不提供其他工具。名称先精确匹配 VikingBot registry name，再支持固定别名 `Read -> read_file`、`Write -> write_file`、`Edit -> edit_file`、`List/ListDir -> list_dir`、`Bash/Shell -> exec`、`WebFetch -> web_fetch`、`WebSearch -> web_search`；未知名称在 Agent 启动前返回 `SKILL_CAPABILITY_UNAVAILABLE`，不做模糊映射。OpenViking 工具使用真实的 `openviking_*` 名称，MCP 使用完整注册名。
+`_COMPILE_CORE_TOOLS` 固定为 `read_file`、`write_file`、`edit_file` 和 `exec`；`_OV_READ_TOOLS` 固定为 `openviking_list`、`openviking_search`、`openviking_grep`、`openviking_glob` 和 `openviking_multi_read`。OpenViking 工具仍受用户权限和 Compile URI scope 限制，本地文件和 shell 工具仍受 task workspace 与 sandbox policy 限制。
 
-Compile 无条件排除 `message`、`cron`、`spawn`、OpenViking 写入/提交工具以及其他会改变 Bot 会话或任务调度状态的工具。除核心 `read_file` 外的本地文件工具、shell、Web、image 和 MCP 等能力只有同时符合本节的 `allowed-tools` 规则与 Bot policy 才可用。Skill 声明 MCP 工具，或未声明 `allowed-tools` 且 Bot policy 允许 MCP 时，request-local AgentLoop 先复用 `_connect_mcp()` 完成注册，再筛选 registry；任务结束统一调用 `close_mcp()`。
+Compile 不使用 Skill 的 `allowed-tools` 推导、授权或限制工具，也不为 Skill 连接 MCP。该字段可作为其他 Skill 宿主的兼容 metadata 保留。Skill 需要飞书、方舟等外部能力时，通过 `exec` 调用 task sandbox 中预装的 CLI；可选的 `requires.bins/env` 只用于提前检查运行条件，不负责安装 CLI 或依赖。
 
-本地文件工具受 task workspace 路径检查约束。shell、Web 和 MCP 仍可能产生外部副作用，只能在 Skill 声明和 Bot policy 都允许时注册；现有 `direct` sandbox 只提供 task cwd，不是 OS 级隔离。远程多用户部署若允许 shell，必须使用隔离 backend 或由管理员明确接受 direct backend 的主机权限风险。
+固定 allowlist 已排除 `message`、`cron`、`spawn`、Web、image、MCP 和 OpenViking 写入/提交工具，无需维护额外 blocklist。`exec` 仍可能产生外部副作用；现有 `direct` sandbox 只提供 task cwd，不是 OS 级隔离。远程多用户部署必须使用隔离 backend，或由管理员明确接受 direct backend 的主机权限风险。
 
 ## 7. AgentLoop 输出协议
 
@@ -346,13 +343,15 @@ await agent_loop.run_structured_task(
 )
 ```
 
-BotCompileService 使用当前 provider/config、`workspace=task_workspace` 和 task-local `SandboxManager` 创建 request-local `AgentLoop`。`run_structured_task()` 用显式的 system/user prompt 建立 messages 后委托给 `_run_agent_loop()`；后者增加可选 `tool_registry` 和 `openviking_tool_names` 参数，并以选定 registry 同时生成 definitions 和执行工具。只有名称属于 `openviking_tool_names` 的现有 OV adapter 才在 `ToolContext`/post-call hook 中收到用户 connection；其他 file/shell/Web/MCP/custom tool 收到 `None`。普通 chat 未传这些参数时仍使用 `self.tools` 和现有 connection 行为。
+BotCompileService 使用当前 provider/config、`workspace=task_workspace` 和 task-local `SandboxManager` 创建 request-local `AgentLoop`。`run_structured_task()` 用显式的 system/user prompt 建立 messages 后委托给 `_run_agent_loop()`；后者增加可选 `tool_registry` 和 `openviking_tool_names` 参数，并以选定 registry 同时生成 definitions 和执行工具。只有名称属于 `openviking_tool_names` 的现有 OV adapter 才在 `ToolContext`/post-call hook 中收到用户 connection；file 和 shell tool 收到 `None`。普通 chat 未传这些参数时仍使用 `self.tools` 和现有 connection 行为。
 
 该入口不使用普通 chat history、自动 memory/experience recall 或普通最终回答。只有 `submit_wiki_bundle` 成功执行并保存合法 bundle 后才能结束；参数校验或领域校验返回 `Error:` 时继续同一 loop 修复。只有自然语言而没有 submit 时，wrapper 追加提交提醒后继续；达到 iteration limit 时直接返回 `AGENT_OUTPUT_INVALID`，不执行现有聊天路径的“禁用工具后再回答一次”。模型调用、工具执行和 token usage 仍沿用现有实现。
 
 现有 `_run_agent_loop()` 的 stop 判定需要从“出现 stop tool name”改成“该 stop tool 的结果通过 `_is_tool_result_success()`”；这是 structured task 正确重试的必要条件，默认聊天未传 `stop_tool_names`，行为不变。
 
-`request_tools` 仍使用现有 `ToolRegistry` 中的工具实例；OpenViking 权限不在 Bot 中模拟，实际调用继续由 Server 校验。`submit_wiki_bundle` 最后注册且不能被同名工具覆盖。Skill 需要 shell、文件或其他工具时，继续在 task-local `SandboxManager` 中执行。
+`request_tools` 仍使用现有 `ToolRegistry` 中的工具实例；OpenViking 权限不在 Bot 中模拟，实际调用继续由 Server 校验。`submit_wiki_bundle` 最后注册。Skill 的文件操作和 CLI 命令继续在 task-local `SandboxManager` 中执行；Prompt 明确要求将 Bash、shell 或 CLI 指令交给 `exec`。
+
+当 `write_file` 可用时，artifact 必须先由 `write_file` 或 `exec` 生成到 task workspace，再通过 `workspace_path` 提交；Wiki page body 同样先写到 `__compile_staging__/wiki_pages/`，再通过 `body_workspace_path` 提交。此时 `submit_wiki_bundle` 的动态 schema 不暴露内联 `content` / `body_markdown`，运行时也执行相同校验，避免大型多文件产物被拼进单次 tool call。
 
 Agent 必须通过 `submit_wiki_bundle` 提交最终结果。
 
@@ -528,8 +527,8 @@ OpenViking proxy 复用 `bot.py` 现有 Bot URL、httpx client、Gateway Token�
 - API key 只存在于运行中任务的内存，不写入 task store 和日志；
 - Agent 的 OpenViking 读取范围只包含 `from`、`to` 和 Skill；
 - OpenViking adapter 的写入和删除工具不进入 request registry；Compile 管理的 Wiki 写入只能由 batch-write 完成；
-- 用户 connection 只注入 scope-guarded OpenViking read adapter，不传给 file/shell/Web/MCP/custom tools；
-- Skill 声明文件、shell、Web 或 MCP 只是在请求能力，不构成授权，仍需通过 Bot policy；这些工具自身可能产生 Compile 之外的副作用，不纳入 batch-write 的一致性保证；
+- 用户 connection 只注入 scope-guarded OpenViking read adapter，不传给 file 或 shell tool；
+- Compile 忽略 Skill 的 `allowed-tools`，固定工具集合中的 `exec` 可能产生 Compile 之外的副作用，不纳入 batch-write 的一致性保证；
 - Compile Prompt 明确把来源正文、catalog 和工具结果视为待整理数据，不能把其中的文本当作指令；只有用户的 reason、所选 Skill 和系统 Compile 规则构成指令层；
 - file tool 只能访问 task workspace；shell 的隔离强度取决于 backend，`direct` 模式可能访问 Bot host，不能表述为安全沙箱；
 - 最终 URI、写入条件和 metadata 由可信代码生成；
@@ -606,7 +605,7 @@ OpenViking batch-write 自己还要设置独立的 request 上限，至少覆盖
 - `openviking/server/routers/bot.py`：基于现有 Bot proxy helper 增加 compile 创建和查询请求；
 - `openviking/server/routers/content.py`：提供 batch write API；
 - `openviking/service/fs_service.py`：暴露 batch coordinator，保持 router 不直接操作 VikingFS；
-- `openviking/core/skill_loader.py`：在现有 parse 结果中保留 `allowed-tools` 是否声明；
+- `openviking/core/skill_loader.py`：继续兼容解析 `allowed-tools`，Compile 不消费该字段；
 - `openviking/storage/content_write.py`：在现有 target validation、锁和 refresh helper 上增加 batch coordinator；
 - `openviking/session/memory/`：仅下沉 Link、Memory 或 refresh 双方共用的小型纯 helper，为 `MemoryFileUtils.write()` 增加兼容默认值的 link-render 开关，并为 refresh 增加默认关闭的 strict 失败传播；
 - `sdk/python/openviking_sdk/client.py`：为 Bot 使用的现有 async/sync HTTP client 增加 `batch_write()` 和 Skill 辅助文件 download 方法。
@@ -638,8 +637,8 @@ bot/vikingbot/compile/
 
 - CLI 参数展开、默认 reason、`--wait` 和 timeout；
 - Bot proxy 的创建/GET 查询身份转交、未启用 Bot 的 503 和上游错误；
-- Skill 复用现有 parser/loader、`allowed-tools` 缺省与显式空数组、相对引用、requirements 和路径逃逸；
-- request registry 始终包含 policy/Compile 允许的三个核心读取工具，并只为其余能力加入 Skill/policy/Compile 共同允许的现有工具和 `submit_wiki_bundle`；禁用 message/cron/spawn/OV write，MCP 在筛选前按需连接且任务后关闭，用户 connection 只进入 OV read adapter；
+- Skill 复用现有 parser/loader、相对引用、requirements 和路径逃逸检查；`allowed-tools` 可正常解析但不影响 Compile 工具集合；
+- request registry 固定包含本地核心工具、scope-guarded OpenViking 只读工具和 `submit_wiki_bundle`，不包含 message/cron/spawn/Web/image/MCP/OV write，用户 connection 只进入 OV read adapter；
 - Agent structured wrapper 复用原 loop；失败 submit 不停止、plain text 会修复、iteration limit 不额外生成普通回答，普通 chat 行为不回归；
 - OpenViking 工具的 URI scope、缺省全库参数和数量/单次/累计输出上限，并确认没有注册第二组 source tools；
 - 非法 bundle 的 loop 内修复、空 bundle no-op 和最终失败；

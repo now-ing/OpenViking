@@ -180,20 +180,33 @@ class SubmitWikiBundleTool(Tool):
 
     @property
     def description(self) -> str:
+        workspace_notice = (
+            " Generate artifact files with write_file or exec, then reference them with "
+            "workspace_path; do not inline file content."
+            if self.require_workspace_files
+            else ""
+        )
         if self._is_skill_target:
             return (
                 "Submit one complete OpenViking Skill package. Include every file under "
                 "<skill-name>/ and include <skill-name>/SKILL.md."
+                f"{workspace_notice}"
             )
         return (
             "Submit the final output only after every path and format explicitly required "
             "by the Skill is represented. Treat only actual Wiki content as Wiki pages and "
-            "preserve exact-path Skill outputs as artifact files."
+            f"preserve exact-path Skill outputs as artifact files.{workspace_notice}"
         )
 
     def validate_params(self, params: dict[str, Any]) -> list[str]:
         if "raw" in params:
-            return ["use the tool schema directly; do not wrap the payload in a JSON string"]
+            message = "use the tool schema directly; do not wrap the payload in a JSON string"
+            if self.require_workspace_files:
+                message += (
+                    "; generate artifact files with write_file or exec and submit them using "
+                    "workspace_path instead of inline content"
+                )
+            return [message]
         return super().validate_params(params)
 
     @property
@@ -202,11 +215,21 @@ class SubmitWikiBundleTool(Tool):
         required = schema.setdefault("required", [])
         if "files" not in required:
             required.append("files")
+        definitions = schema.get("$defs", {})
+        if self.require_workspace_files:
+            file_schema = definitions.get("CompileFileDraft", {})
+            file_properties = file_schema.get("properties", {})
+            if isinstance(file_properties, dict):
+                file_properties.pop("content", None)
+            file_required = file_schema.setdefault("required", [])
+            if "content" in file_required:
+                file_required.remove("content")
+            if "workspace_path" not in file_required:
+                file_required.append("workspace_path")
         if self._is_skill_target:
             schema["properties"].pop("pages", None)
             schema["properties"].pop("links", None)
             required[:] = [field for field in required if field not in {"pages", "links"}]
-            definitions = schema.get("$defs", {})
             definitions.pop("WikiPageDraft", None)
             definitions.pop("WikiLink", None)
             file_schema = definitions.get("CompileFileDraft", {})
@@ -448,14 +471,12 @@ class SubmitWikiBundleTool(Tool):
                 "raw artifact files are only supported for Resource targets or exact "
                 "Skill namespace targets; re-run ov compile with a supported target"
             )
-        if (
-            self.require_workspace_files
-            and len(bundle.files) > 1
-            and any(file.content is not None for file in bundle.files)
+        if self.require_workspace_files and any(
+            file.content is not None for file in bundle.files
         ):
             raise ValueError(
-                "multi-file artifact bundles must be generated with write_file and "
-                "submitted using workspace_path instead of inline content"
+                "artifact files must be generated with write_file or exec and submitted "
+                "using workspace_path instead of inline content"
             )
         page_ids: set[int] = set()
         final_uris: set[str] = set()
