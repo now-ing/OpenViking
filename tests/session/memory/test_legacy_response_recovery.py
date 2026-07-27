@@ -9,6 +9,18 @@ operations object. ``ExtractLoop._recover_legacy_operations`` re-routes such
 items into the matching ``memory_type`` field so they are not silently dropped.
 """
 
+# The ExtractLoop import chain pulls in viking_fs -> pyagfs -> ragfs_python
+# (a Rust native binding). _recover_legacy_operations never touches it, so stub
+# the native module before importing when it is not locally built. This keeps
+# the unit test runnable without a full source build; CI uses the real binding.
+import sys
+import types
+
+try:  # pragma: no cover - only stubs when the native lib is absent
+    import ragfs_python  # noqa: F401
+except Exception:  # pragma: no cover
+    sys.modules.setdefault("ragfs_python", types.ModuleType("ragfs_python"))
+
 from unittest.mock import MagicMock, patch
 
 from openviking.session.memory.dataclass import MemoryField, MemoryTypeSchema
