@@ -44,11 +44,20 @@ def _entities_schema() -> MemoryTypeSchema:
     )
 
 
+def _mock_config(link_enabled: bool = False):
+    """Mock get_openviking_config so tests don't need an ov.conf file."""
+    cfg = type("Cfg", (), {"memory": type("Mem", (), {"link_enabled": link_enabled})()})
+    return cfg
+
+
 def _make_loop(schemas):
     """Build an ExtractLoop shell wired only enough for recovery."""
     gen = SchemaModelGenerator(list(schemas), template_context={"language": "en"})
     gen.generate_all_models()
-    ops_model = gen.create_structured_operations_model(role_scope=None)
+    with patch(
+        "openviking_cli.utils.config.get_openviking_config", return_value=_mock_config()
+    ):
+        ops_model = gen.create_structured_operations_model(role_scope=None)
 
     loop = object.__new__(ExtractLoop)
     loop.ctx = None
