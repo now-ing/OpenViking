@@ -183,24 +183,6 @@ async def test_async_http_client_create_session_posts_config():
 
 
 @pytest.mark.asyncio
-async def test_async_http_client_update_session_config_patches_config():
-    client = AsyncHTTPClient(url="http://localhost:1933")
-    fake_http = SimpleNamespace(patch=AsyncMock(return_value=object()))
-    client._http = fake_http
-    client._handle_response_data = lambda _response: {"result": {"session_id": "s1"}}
-
-    config = {"auto_commit_policy": {"message_count_threshold": 10}}
-
-    result = await client.update_session_config("s1", config)
-
-    assert result == {"session_id": "s1"}
-    fake_http.patch.assert_awaited_once_with(
-        "/api/v1/sessions/s1",
-        json={"config": config},
-    )
-
-
-@pytest.mark.asyncio
 async def test_async_http_client_reindex_posts_content_reindex():
     client = AsyncHTTPClient(url="http://localhost:1933")
     fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
@@ -286,26 +268,6 @@ def test_sync_http_client_batch_add_messages_forwards_to_async_client():
     )
 
 
-def test_sync_http_client_update_session_config_forwards_to_async_client():
-    client = SyncHTTPClient(url="http://localhost:1933")
-    config = {"auto_commit_policy": {"idle_timeout_seconds": 20}}
-
-    with patch.object(
-        client._async_client,
-        "update_session_config",
-        return_value={"session_id": "demo-session", "config": config},
-    ) as mock_update:
-        with patch(
-            "openviking_sdk.client.run_async",
-            return_value={"session_id": "demo-session", "config": config},
-        ) as mock_run:
-            result = client.update_session_config("demo-session", config)
-
-    assert result == {"session_id": "demo-session", "config": config}
-    assert mock_run.called
-    mock_update.assert_called_once_with("demo-session", config)
-
-
 def test_sync_http_client_session_returns_sync_session_wrapper():
     client = SyncHTTPClient(url="http://localhost:1933")
 
@@ -340,25 +302,6 @@ def test_sync_session_add_message_wraps_async_client():
         created_at=None,
         peer_id=None,
     )
-
-
-def test_sync_session_update_config_wraps_async_client():
-    client = SyncHTTPClient(url="http://localhost:1933")
-    session = client.session("demo-session")
-    config = {"auto_commit_policy": {"pending_token_threshold": 64}}
-
-    with patch.object(
-        client._async_client, "update_session_config", Mock(return_value=object())
-    ) as mock_update:
-        with patch(
-            "openviking_sdk.client.run_async",
-            return_value={"session_id": "demo-session", "config": config},
-        ) as mock_run:
-            result = session.update_config(config)
-
-    assert result == {"session_id": "demo-session", "config": config}
-    assert mock_run.called
-    mock_update.assert_called_once_with("demo-session", config)
 
 
 def test_sync_session_commit_and_context_are_sync():

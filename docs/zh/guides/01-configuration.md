@@ -1135,7 +1135,7 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 说明：
 
 - `memory.session_auto_commit` 是服务端全局配置，不是单个 session 的业务 policy。
-- session 级别的自动触发参数通过 session 级 `auto_commit_policy` 设置（见下表）。它在创建 session 时通过 `POST /api/v1/sessions` 的 `config` 对象设置，之后可通过 `PATCH /api/v1/sessions/{session_id}` 编辑，并通过 `GET /api/v1/sessions/{session_id}` 查看。
+- session 级别的自动触发参数通过 session 级 `auto_commit_policy` 设置（见下表）。它只能在创建 session 时通过 `POST /api/v1/sessions` 的 `config` 对象设置，之后通过 `GET /api/v1/sessions/{session_id}` 查看；不支持运行期 PATCH 修改。
 - `default_enabled=false` 时，未传 `config.auto_commit_policy` 创建的 session 保持 auto commit 关闭，返回 `auto_commit_policy: null`。显式传 `{}` 或任意 policy 字段会为该 session 开启 auto commit，并用下方默认值补齐缺失字段。
 - `default_enabled=true` 时，未传 `config.auto_commit_policy` 创建的 session 会带上下方默认 policy。
 - `idle_enabled=false` 时：

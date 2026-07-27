@@ -109,12 +109,12 @@ policy = {
     "keep_recent_count": 2,
 }
 
-client.update_session_config(
-    "demo-session",
-    {"auto_commit_policy": policy},
+client.create_session(
+    "auto-commit-session",
+    config={"auto_commit_policy": policy},
 )
 
-client.session("demo-session").add_message("user", "remember this automatically")
+client.session("auto-commit-session").add_message("user", "remember this automatically")
 ```
 
 ## Quick Start: Async Client

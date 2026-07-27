@@ -177,13 +177,6 @@ class AsyncOpenViking:
         await self._ensure_initialized()
         return await self._client.get_session(session_id, auto_create=auto_create)
 
-    async def update_session(
-        self, session_id: str, config: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Update a session's config (partial merge)."""
-        await self._ensure_initialized()
-        return await self._client.update_session(session_id, config=config)
-
     async def get_session_context(
         self, session_id: str, token_budget: int = 128_000
     ) -> Dict[str, Any]:

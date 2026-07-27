@@ -416,38 +416,6 @@ class SessionService:
         session.meta.last_message_at = get_current_timestamp()
         await session._save_meta()
 
-    async def update_session_config(
-        self,
-        session: Session,
-        config_patch: Optional[Dict[str, Any]],
-    ) -> Dict[str, Any]:
-        """Merge a session config patch (PATCH semantics) and persist it.
-
-        Only keys present in ``config_patch`` are overwritten. Currently the
-        only configurable section is ``auto_commit_policy``.
-        """
-        config_patch = config_patch or {}
-        if "auto_commit_policy" not in config_patch:
-            return self.effective_session_config(session)
-
-        from openviking.storage.transaction import LockContext, get_lock_manager
-
-        meta_path = session._viking_fs._uri_to_path(
-            f"{session.uri}/.meta.json", ctx=session.ctx
-        )
-        async with LockContext(
-            get_lock_manager(),
-            [meta_path],
-            lock_mode="exact",
-            timeout=30.0,
-        ):
-            session._meta = await session._read_latest_meta_or_current()
-            current = AutoCommitPolicy.from_dict(session.meta.auto_commit_policy)
-            merged = current.merge(config_patch.get("auto_commit_policy"))
-            session.meta.auto_commit_policy = merged.to_dict()
-            await session._save_meta()
-        return self.effective_session_config(session)
-
     @staticmethod
     def effective_session_config(session: Session) -> Dict[str, Any]:
         """Return the resolved session config (defaults filled) for GET responses."""

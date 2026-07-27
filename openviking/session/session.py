@@ -1196,7 +1196,10 @@ class Session:
                 batch_content,
                 ctx=self.ctx,
             )
-            await self._save_meta()
+            await self._save_auto_append_meta_from_authoritative_state(
+                appended_count=len(messages),
+                last_message_at=self._meta.last_message_at,
+            )
 
     async def _append_messages_without_path_lock(self, messages: List[Message]) -> None:
         """Compatibility append for storage adapters without path locking."""

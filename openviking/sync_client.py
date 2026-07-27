@@ -83,10 +83,6 @@ class SyncOpenViking:
         """Get session details."""
         return run_async(self._async_client.get_session(session_id, auto_create=auto_create))
 
-    def update_session(self, session_id: str, config: Dict[str, Any]) -> Dict[str, Any]:
-        """Update a session's config (partial merge)."""
-        return run_async(self._async_client.update_session(session_id, config=config))
-
     def get_session_context(self, session_id: str, token_budget: int = 128_000) -> Dict[str, Any]:
         """Get assembled session context."""
         return run_async(

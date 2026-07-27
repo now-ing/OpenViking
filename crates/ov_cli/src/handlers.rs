@@ -416,7 +416,7 @@ pub async fn handle_observer(cmd: ObserverCommands, ctx: CliContext) -> Result<(
     }
 }
 
-use crate::{SessionAutoCommitPolicyCommands, SessionCommands};
+use crate::SessionCommands;
 
 pub async fn handle_session(cmd: SessionCommands, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
@@ -495,29 +495,6 @@ pub async fn handle_session(cmd: SessionCommands, ctx: CliContext) -> Result<()>
             commands::session::commit_session(&client, &session_id, ctx.output_format, ctx.compact)
                 .await
         }
-        SessionCommands::AutoCommitPolicy { action } => match action {
-            SessionAutoCommitPolicyCommands::Set {
-                session_id,
-                pending_token_threshold,
-                message_count_threshold,
-                idle_timeout_seconds,
-                keep_recent_count,
-                min_commit_interval_seconds,
-            } => {
-                commands::session::set_auto_commit_policy(
-                    &client,
-                    &session_id,
-                    pending_token_threshold,
-                    message_count_threshold,
-                    idle_timeout_seconds,
-                    keep_recent_count,
-                    min_commit_interval_seconds,
-                    ctx.output_format,
-                    ctx.compact,
-                )
-                .await
-            }
-        },
     }
 }
 

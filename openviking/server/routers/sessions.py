@@ -76,8 +76,8 @@ PartRequest = TextPartRequest | ContextPartRequest | ToolPartRequest
 class AutoCommitPolicyRequest(BaseModel):
     """Session-level auto-commit policy overrides.
 
-    All fields are optional so the same model works for create (defaults fill
-    the rest) and PATCH (only provided fields are merged). Numeric bounds are
+    All fields are optional so create requests can provide only the fields they
+    need and let defaults fill the rest. Numeric bounds are
     intentionally not enforced here: ``AutoCommitPolicy`` clamps every value
     into ``[0, max]`` so clamping stays defined in a single place and applies
     equally to the HTTP, SDK, and CLI entrypoints.
@@ -96,14 +96,6 @@ class SessionConfigRequest(BaseModel):
     """Session config container."""
 
     auto_commit_policy: Optional[AutoCommitPolicyRequest] = None
-
-    model_config = {"extra": "forbid"}
-
-
-class UpdateSessionConfigRequest(BaseModel):
-    """Request model for PATCH /sessions/{id} config updates."""
-
-    config: SessionConfigRequest
 
     model_config = {"extra": "forbid"}
 
@@ -296,41 +288,6 @@ async def get_session(
     result["pending_tokens"] = int(session.meta.pending_tokens or 0)
     result["config"] = service.sessions.effective_session_config(session)
     return Response(status="ok", result=result)
-
-
-@router.patch("/{session_id}")
-async def update_session(
-    request: UpdateSessionConfigRequest,
-    session_id: str = Path(..., description="Session ID"),
-    _ctx: RequestContext = Depends(get_request_context),
-):
-    """Update a session's config (partial update / merge semantics).
-
-    Only fields present in the request body are changed; omitted fields keep
-    their current values.
-    """
-    from openviking_cli.exceptions import NotFoundError
-
-    service = get_service()
-    try:
-        session = await service.sessions.get(session_id, _ctx, auto_create=False)
-    except NotFoundError:
-        return error_response("NOT_FOUND", f"Session {session_id} not found")
-
-    config_patch: Dict[str, Any] = {}
-    if "auto_commit_policy" in request.config.model_fields_set:
-        if request.config.auto_commit_policy is None:
-            config_patch["auto_commit_policy"] = {}
-        else:
-            config_patch["auto_commit_policy"] = (
-                request.config.auto_commit_policy.model_dump(exclude_none=True)
-            )
-
-    config = await service.sessions.update_session_config(session, config_patch)
-    return Response(
-        status="ok",
-        result={"session_id": session_id, "config": config},
-    )
 
 
 @router.get("/{session_id}/tool-results")

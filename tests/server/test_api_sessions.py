@@ -619,7 +619,7 @@ async def test_get_session_returns_effective_config(client: httpx.AsyncClient):
     assert config["auto_commit_policy"] is None
 
 
-async def test_patch_session_config_merges_policy(client: httpx.AsyncClient):
+async def test_patch_session_config_is_not_supported(client: httpx.AsyncClient):
     create_resp = await client.post(
         "/api/v1/sessions",
         json={
@@ -638,88 +638,12 @@ async def test_patch_session_config_merges_policy(client: httpx.AsyncClient):
         f"/api/v1/sessions/{session_id}",
         json={"config": {"auto_commit_policy": {"message_count_threshold": 25}}},
     )
-    assert patch_resp.status_code == 200
-    patched = patch_resp.json()["result"]["config"]["auto_commit_policy"]
-    # Only message_count_threshold changes; the rest are preserved.
-    assert patched["message_count_threshold"] == 25
-    assert patched["pending_token_threshold"] == 8000
-    assert patched["keep_recent_count"] == 10
+    assert patch_resp.status_code == 405
 
     session_resp = await client.get(f"/api/v1/sessions/{session_id}")
     session_config = session_resp.json()["result"]["config"]["auto_commit_policy"]
-    assert session_config["message_count_threshold"] == 25
+    assert session_config["message_count_threshold"] == 40
     assert session_config["pending_token_threshold"] == 8000
-
-
-async def test_patch_session_config_keep_recent_is_decoupled_from_pending_tokens(
-    client: httpx.AsyncClient,
-):
-    create_resp = await client.post(
-        "/api/v1/sessions",
-        json={
-            "config": {
-                "auto_commit_policy": {
-                    "pending_token_threshold": 50000,
-                    "message_count_threshold": 500,
-                    "keep_recent_count": 0,
-                }
-            }
-        },
-    )
-    assert create_resp.status_code == 200
-    session_id = create_resp.json()["result"]["session_id"]
-
-    await client.post(
-        f"/api/v1/sessions/{session_id}/messages",
-        json={"role": "user", "content": "one two three four five six seven eight"},
-    )
-    await client.post(
-        f"/api/v1/sessions/{session_id}/messages",
-        json={"role": "user", "content": "nine ten eleven twelve thirteen fourteen"},
-    )
-
-    before_resp = await client.get(f"/api/v1/sessions/{session_id}")
-    pending_before = before_resp.json()["result"]["pending_tokens"]
-    assert pending_before > 0
-
-    patch_resp = await client.patch(
-        f"/api/v1/sessions/{session_id}",
-        json={"config": {"auto_commit_policy": {"keep_recent_count": 2}}},
-    )
-    assert patch_resp.status_code == 200
-    assert (
-        patch_resp.json()["result"]["config"]["auto_commit_policy"]["keep_recent_count"] == 2
-    )
-
-    # The policy keep_recent_count is a commit-time reservation only; it must not
-    # retroactively change pending_tokens accounting or the message count.
-    after_resp = await client.get(f"/api/v1/sessions/{session_id}")
-    after_result = after_resp.json()["result"]
-    assert after_result["config"]["auto_commit_policy"]["keep_recent_count"] == 2
-    assert after_result["message_count"] == 2
-    assert after_result["pending_tokens"] == pending_before
-
-
-async def test_patch_session_config_rejects_unknown_policy_field(client: httpx.AsyncClient):
-    create_resp = await client.post("/api/v1/sessions", json={})
-    session_id = create_resp.json()["result"]["session_id"]
-
-    resp = await client.patch(
-        f"/api/v1/sessions/{session_id}",
-        json={"config": {"auto_commit_policy": {"enabled": True}}},
-    )
-    # Unknown keys are rejected as invalid arguments (HTTP 400).
-    assert resp.status_code == 400
-    assert resp.json()["status"] == "error"
-
-
-async def test_patch_session_config_missing_session_returns_not_found(client: httpx.AsyncClient):
-    resp = await client.patch(
-        "/api/v1/sessions/does-not-exist",
-        json={"config": {"auto_commit_policy": {"keep_recent_count": 1}}},
-    )
-    assert resp.status_code == 404
-    assert resp.json()["status"] == "error"
 
 
 async def test_session_load_recovers_message_count_from_live_messages(service):

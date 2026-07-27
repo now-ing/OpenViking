@@ -888,16 +888,6 @@ class LocalClient(BaseClient):
         result["config"] = self._service.sessions.effective_session_config(session)
         return result
 
-    async def update_session(
-        self,
-        session_id: str,
-        config: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        """Update a session's config (partial merge)."""
-        session = await self._service.sessions.get(session_id, self._ctx, auto_create=False)
-        merged = await self._service.sessions.update_session_config(session, config)
-        return {"session_id": session_id, "config": merged}
-
     async def get_session_context(
         self, session_id: str, token_budget: int = 128_000
     ) -> Dict[str, Any]:

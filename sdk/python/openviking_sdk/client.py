@@ -164,9 +164,6 @@ class Session:
     async def batch_add_messages(self, messages: list[dict]) -> Dict[str, Any]:
         return await self._client.batch_add_messages(self.session_id, messages)
 
-    async def update_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
-        return await self._client.update_session_config(self.session_id, config)
-
     async def commit(
         self,
         keep_recent_count: int = 0,
@@ -242,9 +239,6 @@ class SyncSession:
 
     def batch_add_messages(self, messages: list[dict]) -> Dict[str, Any]:
         return self._client.batch_add_messages(self.session_id, messages)
-
-    def update_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
-        return self._client.update_session_config(self.session_id, config)
 
     def commit(
         self,
@@ -1269,15 +1263,6 @@ class AsyncHTTPClient:
         response = await self._request("POST", "/api/v1/sessions", json=json_body)
         return self._handle_response_data(response).get("result", {})
 
-    async def update_session_config(self, session_id: str, config: Dict[str, Any]) -> Dict[str, Any]:
-        session_path = self._path_segment(session_id)
-        response = await self._request(
-            "PATCH",
-            f"/api/v1/sessions/{session_path}",
-            json={"config": config},
-        )
-        return self._handle_response_data(response).get("result", {})
-
     async def list_sessions(self) -> List[Any]:
         response = await self._request("GET", "/api/v1/sessions")
         return self._handle_response(response)
@@ -2238,9 +2223,6 @@ class SyncHTTPClient:
                 config=config,
             )
         )
-
-    def update_session_config(self, session_id: str, config: Dict[str, Any]) -> Dict[str, Any]:
-        return run_async(self._async_client.update_session_config(session_id, config))
 
     def list_sessions(self) -> List[Any]:
         return run_async(self._async_client.list_sessions())
