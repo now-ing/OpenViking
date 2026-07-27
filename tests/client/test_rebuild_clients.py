@@ -240,8 +240,16 @@ async def test_local_client_batch_add_messages_forwards_to_session():
                 "content": "hello",
                 "peer_id": "explicit-user",
                 "created_at": "2026-05-28T00:00:00+00:00",
+                "turn_id": "turn-1",
+                "message_kind": "user_query",
             },
-            {"role": "assistant", "parts": [{"type": "text", "text": "hi"}]},
+            {
+                "role": "assistant",
+                "parts": [{"type": "text", "text": "hi"}],
+                "turn_id": "turn-1",
+                "message_kind": "assistant_step",
+                "source_message_ids": ["u1"],
+            },
         ],
     )
 
@@ -252,9 +260,14 @@ async def test_local_client_batch_add_messages_forwards_to_session():
     assert fake_session.messages[0]["role"] == "user"
     assert fake_session.messages[0]["peer_id"] == "explicit-user"
     assert fake_session.messages[0]["created_at"] == "2026-05-28T00:00:00+00:00"
+    assert fake_session.messages[0]["turn_id"] == "turn-1"
+    assert fake_session.messages[0]["message_kind"] == "user_query"
     assert fake_session.messages[0]["parts"][0].text == "hello"
     assert fake_session.messages[1]["role"] == "assistant"
     assert fake_session.messages[1]["peer_id"] is None
+    assert fake_session.messages[1]["turn_id"] == "turn-1"
+    assert fake_session.messages[1]["message_kind"] == "assistant_step"
+    assert fake_session.messages[1]["source_message_ids"] == ["u1"]
     assert fake_session.messages[1]["parts"][0].text == "hi"
 
 

@@ -32,7 +32,18 @@ from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import run_async
 
-_BATCH_ADD_MESSAGE_KEYS = frozenset({"role", "content", "parts", "created_at", "peer_id"})
+_BATCH_ADD_MESSAGE_KEYS = frozenset(
+    {
+        "role",
+        "content",
+        "parts",
+        "created_at",
+        "peer_id",
+        "turn_id",
+        "message_kind",
+        "source_message_ids",
+    }
+)
 _BATCH_ADD_MESSAGE_IGNORED_KEYS = frozenset({"auto_commit_policy"})
 
 

@@ -1244,13 +1244,13 @@ class Session:
             msg_tokens = int(msg.estimated_tokens or 0)
             self._stats.total_tokens += msg_tokens
 
-        if self._meta.retention_mode != RETENTION_MODE_TURN_BUDGET:
-            keep = int(self._meta.keep_recent_count or 0)
-            if keep <= 0:
-                self._meta.pending_tokens += msg_tokens
-            elif len(self._messages) > keep:
-                pushed_out = self._messages[-(keep + 1)]
-                self._meta.pending_tokens += int(pushed_out.estimated_tokens or 0)
+            if self._meta.retention_mode != RETENTION_MODE_TURN_BUDGET:
+                keep = int(self._meta.keep_recent_count or 0)
+                if keep <= 0:
+                    self._meta.pending_tokens += msg_tokens
+                elif len(self._messages) > keep:
+                    pushed_out = self._messages[-(keep + 1)]
+                    self._meta.pending_tokens += int(pushed_out.estimated_tokens or 0)
 
         if self._meta.retention_mode == RETENTION_MODE_TURN_BUDGET:
             self._rebuild_pending_tokens()
