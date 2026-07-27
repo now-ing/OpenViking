@@ -743,13 +743,13 @@ LiteLLM 的 Bedrock bearer-token API-key 鉴权，请设置 `forward_api_key=tru
 
 不在“可理解”列中的格式继续沿用现有 Parser 和存储行为；OpenViking 不会对这些文件转码，也不会把它们发送给理解模型。当文件被识别为音频或视频叶子节点时，空媒体摘要会使用文件名入库。
 
-对于支持的文件，OpenViking 先为媒体设置防御性过期时间并上传到方舟 Files API，等待处理后通过禁用响应存储的 Responses API 请求引用其 `file_id`，最后在较短的清理超时内尝试删除方舟文件。远端删除属于 best-effort；如果删除失败或超时，不会覆盖已经成功的理解结果，此时由 Files 的防御性过期时间兜底。本地临时文件独立清理，即使远端清理失败或请求被取消也会删除。
+对于支持的文件，OpenViking 将媒体上传到方舟 Files API，且不显式指定 `expire_at`，因此文件保留时间遵循方舟的默认策略。文件处理完成后，OpenViking 通过禁用响应存储的 Responses API 请求引用其 `file_id`，最后在较短的清理超时内尝试删除方舟文件。远端删除属于 best-effort；如果删除失败或超时，不会覆盖已经成功的理解结果，文件将继续遵循方舟的默认保留策略。本地临时文件独立清理，即使远端清理失败或请求被取消也会删除。
 
 - 目录中只有一个音频或视频文件且理解成功时，该摘要直接成为目录 L1，并通过现有语义链路派生 L0，不再调用通用 VLM 做第二次总结。
 - 媒体位于混合目录时，其摘要仍参与现有通用 VLM 聚合。
 - 未配置、理解格式不支持或模型最终失败时，媒体摘要为空；目录 L0/L1 生成保持原有通用行为，被识别为音频或视频的叶子节点则使用文件名作为 DETAIL 向量和 BM25 内容。Provider 错误和媒体理解状态文字不会写入媒体摘要或叶子索引。
 
-媒体处理会把文件内容发送给所配置的外部 provider。防御性过期、best-effort 删除和禁用响应存储可以降低非预期留存风险，但不能替代 provider 自身的隐私与留存控制。方舟 Files 的存储/处理以及 Responses 的模型 token 可能产生费用；启用前请确认 provider 的隐私、留存和计费条款。详见火山方舟官方[音频理解文档](https://docs.volcengine.com/docs/82379/2377589?lang=zh)和[视频理解文档](https://docs.volcengine.com/docs/82379/1895586?lang=zh)。
+媒体处理会把文件内容发送给所配置的外部 provider。禁用响应存储和 best-effort 删除可以降低非预期留存风险，但不能替代 provider 自身的隐私与留存控制；上传文件未显式指定过期时间，其保留周期由方舟的默认策略决定。方舟 Files 的存储/处理以及 Responses 的模型 token 可能产生费用；启用前请确认 provider 的隐私、留存和计费条款。详见火山方舟官方[音频理解文档](https://docs.volcengine.com/docs/82379/2377589?lang=zh)和[视频理解文档](https://docs.volcengine.com/docs/82379/1895586?lang=zh)。
 
 ### query_planner
 

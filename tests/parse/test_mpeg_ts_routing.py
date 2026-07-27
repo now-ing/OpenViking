@@ -123,7 +123,7 @@ def test_parser_registry_routes_ordinary_typescript_to_text_fallback(
     source_path = tmp_path / relative_path
     source_path.parent.mkdir(parents=True, exist_ok=True)
     source_path.write_text("export const answer: number = 42;", encoding="utf-8")
-    registry = registry_module.ParserRegistry(register_optional=False)
+    registry = registry_module.ParserRegistry()
 
     assert registry.get_parser_for_file(source_path) is None
 
@@ -131,7 +131,7 @@ def test_parser_registry_routes_ordinary_typescript_to_text_fallback(
 def test_parser_registry_routes_actual_mpeg_ts_to_video(tmp_path):
     source_path = tmp_path / "broadcast.ts"
     source_path.write_bytes(_mpeg_ts_bytes(188))
-    registry = registry_module.ParserRegistry(register_optional=False)
+    registry = registry_module.ParserRegistry()
 
     assert isinstance(registry.get_parser_for_file(source_path), VideoParser)
 
@@ -141,7 +141,7 @@ def test_parser_registry_does_not_read_past_sniff_limit(tmp_path):
     source_path.write_bytes(
         b"x" * media_constants.MPEG_TS_SNIFF_BYTES + _mpeg_ts_bytes(188)
     )
-    registry = registry_module.ParserRegistry(register_optional=False)
+    registry = registry_module.ParserRegistry()
 
     assert registry.get_parser_for_file(source_path) is None
 
