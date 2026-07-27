@@ -21,7 +21,12 @@ from openviking.utils.skill_processor import validate_skill_name
 from openviking_cli.exceptions import OpenVikingError
 from openviking_cli.utils import VikingURI
 from vikingbot.agent.tools.base import Tool, ToolContext
-from vikingbot.compile.models import CompileLimits, WikiBundleDraft
+from vikingbot.compile.models import (
+    COMPILE_STAGING_ROOT,
+    COMPILE_WIKI_PAGE_ROOT,
+    CompileLimits,
+    WikiBundleDraft,
+)
 from vikingbot.compile.renderer import (
     is_reserved_wiki_page_uri,
     validate_declared_okf_markdown,
@@ -37,6 +42,10 @@ def _normalize_workspace_path(path: str) -> str:
     while normalized.startswith("./"):
         normalized = normalized[2:]
     return normalized
+
+
+def _path_is_within(path: str, root: str) -> bool:
+    return path == root or path.startswith(root + "/")
 
 
 def _uri_in_roots(uri: str, roots: tuple[str, ...]) -> bool:
@@ -140,6 +149,7 @@ class SubmitWikiBundleTool(Tool):
         limits: CompileLimits,
         require_workspace_files: bool = False,
         require_workspace_pages: bool = False,
+        workspace_baseline: set[str] | None = None,
         wiki_uri_resolver: Callable[[str], Awaitable[bool]] | None = None,
     ):
         self.source_ids = source_ids
@@ -150,6 +160,11 @@ class SubmitWikiBundleTool(Tool):
         self.limits = limits
         self.require_workspace_files = require_workspace_files
         self.require_workspace_pages = require_workspace_pages
+        self.workspace_baseline = (
+            None
+            if workspace_baseline is None
+            else {_normalize_workspace_path(path) for path in workspace_baseline}
+        )
         self.wiki_uri_resolver = wiki_uri_resolver
         self.bundle: WikiBundleDraft | None = None
         self.file_payloads: list[bytes | None] = []
@@ -241,6 +256,10 @@ class SubmitWikiBundleTool(Tool):
             bundle = WikiBundleDraft.model_validate(
                 {"pages": pages or [], "files": files or [], "links": raw_links}
             )
+            await self._validate_workspace_manifest(
+                bundle,
+                tool_context=tool_context,
+            )
             bundle = await self._materialize_page_bodies(
                 bundle, tool_context=tool_context
             )
@@ -258,6 +277,92 @@ class SubmitWikiBundleTool(Tool):
             f"Wiki bundle accepted with {len(bundle.pages)} page(s) and "
             f"{len(bundle.files)} file(s)."
         )
+
+    async def _list_workspace_files(
+        self,
+        *,
+        tool_context: ToolContext,
+    ) -> set[str]:
+        if tool_context.sandbox_manager is None:
+            raise ValueError("task sandbox is unavailable")
+        sandbox = await tool_context.sandbox_manager.get_sandbox(
+            tool_context.session_key
+        )
+        files: set[str] = set()
+        pending = [""]
+        visited = 0
+        while pending:
+            directory = pending.pop()
+            try:
+                entries = await sandbox.list_dir(directory or ".")
+            except Exception as exc:
+                raise ValueError("task workspace could not be inspected") from exc
+            for name, is_dir in entries:
+                relative = _normalize_workspace_path(
+                    f"{directory}/{name}" if directory else name
+                )
+                visited += 1
+                if visited > self.limits.target_inventory_entries:
+                    raise ValueError("task workspace inventory limit exceeded")
+                if _path_is_within(relative, COMPILE_STAGING_ROOT):
+                    continue
+                if name in {".git", "__pycache__"}:
+                    continue
+                if is_dir:
+                    pending.append(relative)
+                elif not relative.endswith((".pyc", ".pyo")):
+                    files.add(relative)
+        return files
+
+    async def _validate_workspace_manifest(
+        self,
+        bundle: WikiBundleDraft,
+        *,
+        tool_context: ToolContext,
+    ) -> None:
+        if context_type_for_uri(self.target_uri) != "resource":
+            return
+        page_paths = {
+            _normalize_workspace_path(page.body_workspace_path)
+            for page in bundle.pages
+            if page.body_workspace_path is not None
+        }
+        artifact_paths = {
+            _normalize_workspace_path(file.workspace_path)
+            for file in bundle.files
+            if file.workspace_path is not None
+        }
+        errors: list[str] = []
+        invalid_pages = sorted(
+            path for path in page_paths if not _path_is_within(path, COMPILE_WIKI_PAGE_ROOT)
+        )
+        if self.require_workspace_pages and invalid_pages:
+            errors.append(
+                "Wiki page body workspace paths must be temporary files under "
+                f"{COMPILE_WIKI_PAGE_ROOT}/, not Skill artifact paths: "
+                + ", ".join(invalid_pages)
+            )
+        invalid_artifacts = sorted(
+            path for path in artifact_paths if _path_is_within(path, COMPILE_STAGING_ROOT)
+        )
+        if invalid_artifacts:
+            errors.append(
+                "Skill artifact workspace paths must remain outside the Compile staging "
+                "directory: " + ", ".join(invalid_artifacts)
+            )
+
+        if self.workspace_baseline is not None:
+            current_files = await self._list_workspace_files(tool_context=tool_context)
+            generated_artifacts = current_files - self.workspace_baseline
+            missing_artifacts = sorted(generated_artifacts - artifact_paths)
+            if missing_artifacts:
+                errors.append(
+                    "generated Skill artifacts are missing from files; preserve their "
+                    "required paths and submit them unchanged: "
+                    + ", ".join(missing_artifacts)
+                )
+        if errors:
+            raise ValueError("; ".join(errors))
 
     async def _read_workspace_bytes(
         self,
@@ -366,7 +471,12 @@ class SubmitWikiBundleTool(Tool):
             if "\n" in page.summary.strip() or "\r" in page.summary.strip():
                 raise ValueError(f"page {page.page_id} summary must be one line")
             if page.body_markdown.lstrip().startswith("---"):
-                raise ValueError(f"page {page.page_id} must not include YAML frontmatter")
+                raise ValueError(
+                    f"page {page.page_id} must not include YAML frontmatter. If this is a "
+                    "Skill-prescribed artifact, do not edit or strip its frontmatter; submit "
+                    f"it through files and create a separate Wiki body under "
+                    f"{COMPILE_WIKI_PAGE_ROOT}/"
+                )
             if not page.source_ids or any(source_id not in self.source_ids for source_id in page.source_ids):
                 raise ValueError(f"page {page.page_id} has invalid source_ids")
             if page.update_uri:

@@ -24,6 +24,8 @@ from vikingbot.agent.skills import SkillsLoader
 from vikingbot.agent.tools.compile import CompileScopedTool, SubmitWikiBundleTool
 from vikingbot.agent.tools.registry import ToolRegistry
 from vikingbot.compile.models import (
+    COMPILE_STAGING_ROOT,
+    COMPILE_WIKI_PAGE_ROOT,
     DEFAULT_COMPILE_REASON,
     TERMINAL_STATUSES,
     CompileAccepted,
@@ -381,7 +383,8 @@ class BotCompileService:
 
             await self._set_state(task_id, status="running", stage="collecting_context")
             sources = await self._build_sources(client, request.from_)
-            is_skill_target = classify_uri(request.to).context_type == "skill"
+            target_type = classify_uri(request.to).context_type
+            is_skill_target = target_type == "skill"
             if is_skill_target:
                 catalog: list[dict[str, Any]] = []
                 target_inventory: dict[str, Mapping[str, Any]] = {}
@@ -440,6 +443,15 @@ class BotCompileService:
                 mcp_servers=self.agent_loop._mcp_servers,
             )
             await self._connect_mcp_if_needed(request_loop, parsed_skill)
+            workspace_baseline = (
+                {
+                    path.relative_to(workspace).as_posix()
+                    for path in workspace.rglob("*")
+                    if path.is_file()
+                }
+                if target_type == "resource"
+                else None
+            )
             registry, ov_names, unavailable_tools = self._build_request_registry(
                 request_loop,
                 parsed_skill=parsed_skill,
@@ -448,6 +460,7 @@ class BotCompileService:
                 source_ids=set(source_roots),
                 catalog_uris=catalog_uris,
                 file_catalog_uris=file_catalog_uris,
+                workspace_baseline=workspace_baseline,
                 wiki_uri_resolver=resolve_wiki_uri,
             )
             if unavailable_tools:
@@ -1076,6 +1089,7 @@ class BotCompileService:
         source_ids: set[str],
         catalog_uris: set[str],
         file_catalog_uris: set[str] | None = None,
+        workspace_baseline: set[str] | None = None,
         wiki_uri_resolver: Callable[[str], Awaitable[bool]] | None = None,
     ) -> tuple[ToolRegistry, set[str], list[str]]:
         available = set(request_loop.tools.tool_names)
@@ -1137,6 +1151,7 @@ class BotCompileService:
                 limits=self.limits,
                 require_workspace_files=registry.has("write_file"),
                 require_workspace_pages=registry.has("write_file"),
+                workspace_baseline=workspace_baseline,
                 wiki_uri_resolver=wiki_uri_resolver,
             )
         )
@@ -1206,8 +1221,7 @@ Finish only by calling the designated final submission tool.
 Do not include YAML frontmatter in Wiki page bodies; trusted code adds their OKF metadata, paths, citations, and write preconditions.
 When referencing a supplied source catalog entry in a Wiki page, use its URI as an ordinary Markdown link.
 Artifact files are preserved exactly and may contain their own format-specific frontmatter. {file_notice}{capability_notice}
-Generate Wiki page bodies and multi-file or large artifacts in the workspace when a write tool is available, then reference those workspace outputs in the final structured submission instead of inlining their contents.
-Keep reader-oriented Wiki page bodies separate from exact artifact files.
+Write Wiki page bodies under {COMPILE_WIKI_PAGE_ROOT}/ and temporary work under {COMPILE_STAGING_ROOT}/tmp/.
 
 Selected Skill:
 {skill_content}"""

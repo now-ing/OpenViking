@@ -14,6 +14,8 @@ DEFAULT_COMPILE_REASON = (
     "Follow the loaded Skill's instructions to transform the provided source materials "
     "into the outputs required by the Skill."
 )
+COMPILE_STAGING_ROOT = "__compile_staging__"
+COMPILE_WIKI_PAGE_ROOT = f"{COMPILE_STAGING_ROOT}/wiki_pages"
 OKF_VERSION = "0.1"
 TERMINAL_STATUSES = frozenset({"completed", "failed"})
 
@@ -76,9 +78,8 @@ class WikiPageDraft(BaseModel):
     body_workspace_path: str | None = Field(
         default=None,
         description=(
-            "Relative path of a reader-oriented UTF-8 Markdown Wiki body generated "
-            "separately from exact artifact files in the task workspace. Use ordinary "
-            "Markdown links when referencing supplied source catalog entries."
+            f"Relative path under {COMPILE_WIKI_PAGE_ROOT}/ for a generated "
+            "UTF-8 Markdown Wiki body."
         ),
     )
     source_ids: list[str] = Field(

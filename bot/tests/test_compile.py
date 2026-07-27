@@ -90,11 +90,11 @@ def test_compile_bundle_schema_distinguishes_wiki_pages_and_artifact_files():
     assert "Markdown, YAML, JSON" in properties["files"]["description"]
     assert "generated Wiki pages only" in properties["links"]["description"]
     assert "known source URIs" in page_properties["body_markdown"]["description"]
-    assert "task workspace" in page_properties["body_workspace_path"]["description"]
-    assert "reader-oriented" in page_properties["body_workspace_path"]["description"]
+    assert "generated UTF-8 Markdown Wiki body" in page_properties["body_workspace_path"]["description"]
+    assert "__compile_staging__/wiki_pages/" in page_properties["body_workspace_path"]["description"]
     assert "filename derives from title" in page_properties["path_hint"]["description"]
-    assert "source catalog entries" in page_properties["body_workspace_path"]["description"]
     assert "supplied source roots" in page_properties["source_ids"]["description"]
+    assert "preserve every required path and format" in properties["files"]["description"]
 
 
 def test_wiki_page_requires_exactly_one_body_source():
@@ -966,8 +966,8 @@ async def test_submit_tool_materializes_workspace_page_body_before_validation():
     class Sandbox:
         async def read_file_bytes(self, path):
             return {
-                "wiki-pages/overview.md": b"Read Details next.",
-                "wiki-pages/details.md": b"Details body.",
+                "__compile_staging__/wiki_pages/overview.md": b"Read Details next.",
+                "__compile_staging__/wiki_pages/details.md": b"Details body.",
             }[path]
 
     class Manager:
@@ -988,10 +988,10 @@ async def test_submit_tool_materializes_workspace_page_body_before_validation():
     )
     overview = _page(1, "Overview")
     overview.pop("body_markdown")
-    overview["body_workspace_path"] = "wiki-pages/overview.md"
+    overview["body_workspace_path"] = "__compile_staging__/wiki_pages/overview.md"
     details = _page(2, "Details")
     details.pop("body_markdown")
-    details["body_workspace_path"] = "wiki-pages/details.md"
+    details["body_workspace_path"] = "__compile_staging__/wiki_pages/details.md"
 
     accepted = await tool.execute(
         context,
@@ -1038,8 +1038,89 @@ async def test_submit_tool_rejects_artifact_reused_as_wiki_body():
     )
 
     assert result.startswith("Error: Invalid Wiki bundle:")
-    assert "separate reader-oriented workspace file" in result
+    assert "must be temporary files under __compile_staging__/wiki_pages/" in result
     assert tool.bundle is None
+
+
+@pytest.mark.asyncio
+async def test_submit_tool_preserves_generated_skill_artifacts_alongside_staged_wiki_pages():
+    files = {
+        "skills/compiler/SKILL.md": b"input skill",
+        "ara-output/PAPER.md": b"---\ntitle: ARA\nauthors: [Ada]\nyear: 2026\n---\n\n# ARA",
+        "ara-output/logic/problem.md": b"# Problem",
+        "__compile_staging__/wiki_pages/overview.md": b"# Reader overview",
+        "__compile_staging__/tmp/notes.md": b"scratch",
+    }
+
+    class Sandbox:
+        async def list_dir(self, path):
+            directories = {
+                ".": [("ara-output", True), ("__compile_staging__", True), ("skills", True)],
+                "ara-output": [("PAPER.md", False), ("logic", True)],
+                "ara-output/logic": [("problem.md", False)],
+                "skills": [("compiler", True)],
+                "skills/compiler": [("SKILL.md", False)],
+            }
+            return directories[path]
+
+        async def read_file_bytes(self, path):
+            return files[path]
+
+    class Manager:
+        async def get_sandbox(self, session_key):
+            assert session_key is not None
+            return Sandbox()
+
+    context = ToolContext(
+        session_key=SessionKey(type="compile", channel_id="cmp", chat_id="cmp"),
+        sandbox_manager=Manager(),
+    )
+    tool = SubmitWikiBundleTool(
+        source_ids={"src_1"},
+        catalog_uris=set(),
+        target_uri="viking://resources/wiki",
+        limits=CompileLimits(),
+        require_workspace_files=True,
+        require_workspace_pages=True,
+        workspace_baseline={"skills/compiler/SKILL.md"},
+    )
+    page = _page(1, "Overview")
+    page.pop("body_markdown")
+    page["body_workspace_path"] = "__compile_staging__/wiki_pages/overview.md"
+
+    rejected = await tool.execute(
+        context,
+        pages=[page],
+        files=[],
+    )
+    assert "generated Skill artifacts are missing from files" in rejected
+    assert "ara-output/PAPER.md" in rejected
+    assert "ara-output/logic/problem.md" in rejected
+
+    accepted = await tool.execute(
+        context,
+        pages=[page],
+        files=[
+            {
+                "path": "PAPER.md",
+                "workspace_path": "ara-output/PAPER.md",
+            },
+            {
+                "path": "logic/problem.md",
+                "workspace_path": "ara-output/logic/problem.md",
+            },
+        ],
+    )
+    assert accepted == "Wiki bundle accepted with 1 page(s) and 2 file(s)."
+    assert tool.bundle is not None
+    assert [file.path for file in tool.bundle.files] == [
+        "PAPER.md",
+        "logic/problem.md",
+    ]
+    assert tool.file_payloads == [
+        files["ara-output/PAPER.md"],
+        files["ara-output/logic/problem.md"],
+    ]
 
 
 class _EchoTool(Tool):
@@ -1436,11 +1517,13 @@ async def test_execute_skill_target_skips_recursive_catalog_and_completes(
         source_ids,
         catalog_uris,
         file_catalog_uris,
+        workspace_baseline,
         wiki_uri_resolver,
     ):
         del request_loop, parsed_skill, roots, source_ids
         assert catalog_uris == set()
         assert file_catalog_uris == set()
+        assert workspace_baseline is None
         assert callable(wiki_uri_resolver)
         registry = ToolRegistry()
         registry.register(
@@ -1880,8 +1963,8 @@ def test_compile_prompt_explains_unavailable_tools_to_agent_only():
     assert "match_text" not in system
     assert "pages=[]" not in system
     assert "workspace_path" not in system
-    assert "reference those workspace outputs in the final structured submission" in system
-    assert "Keep reader-oriented Wiki page bodies separate" in system
+    assert "__compile_staging__/wiki_pages/" in system
+    assert "__compile_staging__/tmp/" in system
     assert "use its URI as an ordinary Markdown link" in system
     assert "unavailable" not in user
     assert "verify every output path and format explicitly required by the Skill" in user
