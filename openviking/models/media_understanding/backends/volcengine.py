@@ -230,10 +230,6 @@ class VolcengineMediaUnderstandingClient(MediaUnderstandingClient):
         self.fps = float(config.get("fps", 1.0))
         self.extra_headers = dict(config.get("extra_headers") or {})
         self._cleanup_timeout = 5.0
-        self._remote_file_ttl_seconds = max(
-            3600,
-            int(self.file_processing_timeout + self.timeout + 300),
-        )
         self._client_cache = LoopScopedAsyncClientCache()
 
     def _build_async_client(self):
@@ -321,7 +317,6 @@ class VolcengineMediaUnderstandingClient(MediaUnderstandingClient):
                 uploaded = await client.files.create(
                     file=upload_file,
                     purpose="user_data",
-                    expire_at=int(time.time()) + self._remote_file_ttl_seconds,
                     preprocess_configs=preprocess,
                     extra_headers=self.extra_headers,
                 )

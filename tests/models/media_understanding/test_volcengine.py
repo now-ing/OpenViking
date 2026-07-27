@@ -571,13 +571,12 @@ async def test_audio_uses_files_and_input_audio(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_requests_use_defensive_remote_retention_controls(monkeypatch):
+async def test_requests_use_provider_default_file_retention(monkeypatch):
     ark = _ark("audio result")
     client = VolcengineMediaUnderstandingClient(
         {"provider": "volcengine", "api_key": "key", "model": "audio-model"}
     )
     monkeypatch.setattr(client, "_build_async_client", lambda: ark)
-    monkeypatch.setattr(volcengine_backend.time, "time", lambda: 1_000.0)
 
     await client.understand(
         content=b"ID3-audio",
@@ -586,7 +585,7 @@ async def test_requests_use_defensive_remote_retention_controls(monkeypatch):
         prompt="analyze audio",
     )
 
-    assert ark.files.create.await_args.kwargs["expire_at"] == 4_600
+    assert "expire_at" not in ark.files.create.await_args.kwargs
     assert ark.responses.create.await_args.kwargs["store"] is False
 
 
