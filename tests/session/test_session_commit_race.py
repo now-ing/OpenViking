@@ -55,8 +55,12 @@ class TestCommitRace:
             1 for r in results if isinstance(r, dict) and r.get("archived") is True
         )
         assert archived_count == 1, f"Expected exactly 1 archived commit, got {archived_count}"
-        conflicts = [r for r in results if isinstance(r, LockAcquisitionError)]
-        assert len(conflicts) == 1
+        non_archived = [r for r in results if not (isinstance(r, dict) and r.get("archived"))]
+        assert len(non_archived) == 1
+        assert isinstance(non_archived[0], LockAcquisitionError) or (
+            isinstance(non_archived[0], dict)
+            and non_archived[0].get("reason") == "no_messages"
+        )
 
         # Messages should be cleared after commit
         assert len(session.messages) == 0
@@ -667,11 +671,14 @@ class TestCommitRace:
 
         committing = client._client._service.sessions.session(ctx, session_id)
         await committing.load()
-        with pytest.raises(LockAcquisitionError):
-            await committing.commit_async()
+        commit_task = asyncio.create_task(committing.commit_async())
+        await asyncio.sleep(0)
+        assert not commit_task.done()
 
         allow_save.set()
         await append_task
+        result = await commit_task
+        assert result.get("archived") is True
 
     async def test_commit_boundary_meta_waits_for_auto_append_lock_after_phase1(
         self, client: AsyncOpenViking

@@ -1123,8 +1123,28 @@ class Session:
         )
 
     def _append_messages(self, messages: List[Message]) -> None:
-        """Append messages through the same authoritative lock as commit Phase 1."""
-        run_async(self._append_messages_authoritatively(messages))
+        """Append messages, using the commit path lock only for auto-commit sessions."""
+        if self._should_use_auto_commit_append_lock():
+            run_async(self._append_messages_authoritatively(messages))
+        else:
+            run_async(self._append_messages_without_path_lock(messages))
+
+    async def _append_messages_for_policy(self, messages: List[Message]) -> None:
+        """Async counterpart to ``_append_messages``."""
+        use_session_lock = self._meta.auto_commit_policy is not None
+        if not use_session_lock and self._viking_fs:
+            try:
+                latest_meta = await self._read_latest_meta_or_current()
+                use_session_lock = latest_meta.auto_commit_policy is not None
+                if use_session_lock:
+                    self._meta.auto_commit_policy = latest_meta.auto_commit_policy
+                    self._meta.keep_recent_count = latest_meta.keep_recent_count
+            except Exception:
+                use_session_lock = False
+        if use_session_lock:
+            await self._append_messages_authoritatively(messages)
+        else:
+            await self._append_messages_without_path_lock(messages)
 
     async def _append_messages_authoritatively(self, messages: List[Message]) -> None:
         """Reload and append under the session path lock.
@@ -1156,7 +1176,7 @@ class Session:
             lock_mode="exact",
             timeout=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS,
         ):
-            self._messages = await self._read_live_messages_strict()
+            self._messages = await self._read_live_messages()
             in_memory_meta = self._meta
             try:
                 meta_content = await self._viking_fs.read_file(
@@ -1182,8 +1202,12 @@ class Session:
         """Compatibility append for storage adapters without path locking."""
         from openviking_cli.exceptions import NotFoundError
 
+        if not self._viking_fs:
+            self._apply_appended_messages_to_state(messages)
+            return
+
         try:
-            self._messages = await self._read_live_messages_strict()
+            self._messages = await self._read_live_messages()
         except (FileNotFoundError, NotFoundError):
             # A fresh lightweight adapter may not materialize messages.jsonl
             # until its first append.
@@ -1208,7 +1232,7 @@ class Session:
             batch_content,
             ctx=self.ctx,
         )
-        await self._save_meta()
+        await self._save_append_meta_preserving_latest_config()
 
     def _apply_appended_messages_to_state(self, messages: List[Message]) -> None:
         """Update in-memory counters after an authoritative root reload."""
@@ -1236,15 +1260,6 @@ class Session:
             self._meta.total_message_count += len(messages)
         if messages:
             self._meta.last_message_at = get_current_timestamp()
-
-        use_session_lock = self._should_use_auto_commit_append_lock()
-        self._append_messages_to_jsonl_batch(
-            messages,
-            use_session_lock=use_session_lock,
-            save_meta_under_lock=use_session_lock,
-        )
-        if not use_session_lock:
-            self._save_append_meta_preserving_latest_config_sync()
 
     def _should_use_auto_commit_append_lock(self) -> bool:
         """Return True when the latest persisted session config uses auto commit."""
@@ -1343,7 +1358,7 @@ class Session:
     ) -> List[Message]:
         """Asynchronously add multiple messages without blocking the caller loop."""
         messages = self._build_messages(messages_spec)
-        await self._append_messages_authoritatively(messages)
+        await self._append_messages_for_policy(messages)
         return messages
 
     def add_message(
@@ -1606,7 +1621,7 @@ class Session:
                     raise ValueError("Phase 1 metadata has invalid message ID lists")
                 retained_ids = [item for item in retained_ids if isinstance(item, str)]
                 archived_ids = [item for item in archived_ids if isinstance(item, str)]
-                live_messages = await self._read_live_messages_strict()
+                live_messages = await self._read_live_messages()
             except Exception as exc:
                 await self._write_failed_marker(
                     archive_uri,
@@ -1965,8 +1980,19 @@ class Session:
                 phase1_stage = "phase1_persist"
                 self._messages = retained_messages
                 await self._write_to_agfs_async(messages=self._messages)
-                self._meta.message_count = len(self._messages)
-                self._meta.pending_tokens = 0
+                latest_messages = await self._read_live_messages()
+                if len(latest_messages) > retained_message_count:
+                    latest_meta = await self._read_latest_meta_or_current()
+                    self._messages = latest_messages
+                    self._meta = latest_meta
+                    self._meta.message_count = max(
+                        int(self._meta.message_count or 0),
+                        len(latest_messages),
+                    )
+                    self._rebuild_pending_tokens()
+                else:
+                    self._meta.message_count = retained_message_count
+                    self._meta.pending_tokens = 0
                 self._remember_retention_policy(
                     keep_recent_count=stored_keep_recent_count,
                     retention_mode=retention_mode,
