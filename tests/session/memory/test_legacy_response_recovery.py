@@ -11,8 +11,6 @@ items into the matching ``memory_type`` field so they are not silently dropped.
 
 from unittest.mock import MagicMock
 
-import pytest
-
 from openviking.session.memory.dataclass import MemoryField, MemoryTypeSchema
 from openviking.session.memory.extract_loop import ExtractLoop
 from openviking.session.memory.merge_op import MergeOp
