@@ -44,7 +44,7 @@ Create a new session. Sessions are containers for conversations, storing message
 |-----------|------|----------|---------|-------------|
 | session_id | str | No | None | Session ID. Creates new session with auto-generated ID if None |
 | memory_policy | object | No | None | Default memory extraction policy for the session. Optional `self` and `peer` switches control write targets, optional `working_memory.enabled=false` skips archive summaries, and optional top-level `memory_types` limits extraction to specific enabled memory schemas. When `memory_types` is omitted or `null`, all enabled memory schemas are allowed. Invalid shapes or unknown memory types are rejected with `InvalidArgumentError`. |
-| config | object | No | None | Optional session config. Currently supports an `auto_commit_policy` object (see table below). Any provided fields are validated, clamped to their bounds, and merged over the defaults; the effective policy is returned in the response `result.config` and persisted into session metadata. If no policy is provided, auto commit is disabled unless `memory.session_auto_commit.default_enabled=true`. |
+| config | object | No | None | Optional create-time session config. Currently supports an `auto_commit_policy` object (see table below). Any provided fields are validated, clamped to their bounds, and merged over the defaults; the effective policy is returned in the response `result.config` and persisted into session metadata. If no policy is provided, auto commit is disabled unless `memory.session_auto_commit.default_enabled=true`. Session config is immutable after creation. |
 
 `config.auto_commit_policy` fields (all optional; omitted fields fall back to the defaults when a policy is present):
 

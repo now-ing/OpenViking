@@ -842,7 +842,8 @@ class LocalClient(BaseClient):
             session_id: Optional session ID. If provided, creates a session with the given ID.
                        If None, creates a new session with auto-generated ID.
             memory_policy: Optional default extraction policy for future commits.
-            config: Optional session config, e.g. ``{"auto_commit_policy": {...}}``.
+            config: Optional create-time session config, e.g.
+                ``{"auto_commit_policy": {...}}``.
         """
         execution = await run_with_telemetry(
             operation="session.create",

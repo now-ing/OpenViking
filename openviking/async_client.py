@@ -157,7 +157,8 @@ class AsyncOpenViking:
             session_id: Optional session ID. If provided, creates a session with the given ID.
                        If None, creates a new session with auto-generated ID.
             memory_policy: Optional default extraction policy for future commits.
-            config: Optional session config, e.g. ``{"auto_commit_policy": {...}}``.
+            config: Optional create-time session config, e.g.
+                ``{"auto_commit_policy": {...}}``.
         """
         await self._ensure_initialized()
         return await self._client.create_session(

@@ -44,7 +44,7 @@ Session API 按认证用户作用域访问会话，并返回 canonical user sess
 |------|------|------|--------|------|
 | session_id | str | 否 | None | 会话 ID。如果为 None，则创建一个自动生成 ID 的新会话 |
 | memory_policy | object | 否 | None | 会话默认的记忆抽取策略。可选的 `self` 和 `peer` 开关控制写入目标；可选的 `working_memory.enabled=false` 跳过 archive summary；可选的顶层 `memory_types` 将抽取限制为指定的 enabled memory schema。未传或为 `null` 时允许所有 enabled memory schema。非法结构或未知 memory type 会以 `InvalidArgumentError` 拒绝。 |
-| config | object | 否 | None | 可选的 session 配置。目前支持 `auto_commit_policy` 对象（见下表）。传入的字段会被校验并 clamp 到取值范围，然后合并到默认值之上；最终生效的策略会在响应的 `result.config` 中返回，并持久化到 session meta。未传 policy 时 auto commit 关闭，除非 `memory.session_auto_commit.default_enabled=true`。 |
+| config | object | 否 | None | 可选的创建期 session 配置。目前支持 `auto_commit_policy` 对象（见下表）。传入的字段会被校验并 clamp 到取值范围，然后合并到默认值之上；最终生效的策略会在响应的 `result.config` 中返回，并持久化到 session meta。未传 policy 时 auto commit 关闭，除非 `memory.session_auto_commit.default_enabled=true`。Session 配置创建后不可变。 |
 
 `config.auto_commit_policy` 字段（均为可选；存在 policy 时，未传字段回退到默认值）：
 

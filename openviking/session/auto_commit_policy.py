@@ -4,7 +4,8 @@
 
 Sessions without a stored policy keep automatic commits disabled. When a policy
 object is present, missing fields fall back to the recommended defaults below.
-Configuration is only set via session create / PATCH / GET, never per message.
+Configuration is set at session creation and inspected via session GET, never
+per message.
 """
 
 from __future__ import annotations
