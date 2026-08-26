@@ -46,7 +46,7 @@ def generate_uri(
     fields: Dict[str, Any],
     user_space: str = "default",
     extract_context: Any = None,
-) -> tuple[str, str]:
+) -> str:
     """
     Generate a full URI from memory type schema and field values.
 
@@ -81,7 +81,37 @@ def generate_uri(
             raise ValueError(f"Template variable '{var}' has None value")
     # Render using unified render_template method (same as content_template)
     uri = render_template(uri_template, context, extract_context)
-    return uri
+    return sanitize_uri_path_segments(uri)
+
+
+# Win32 silently drops trailing spaces/dots when materializing a path, which
+# desynchronizes on-disk directories from RAGFS lock-token paths (#4308).
+_TRAILING_FS_UNSAFE_RE = re.compile(r"[\s.]+$")
+
+
+def sanitize_uri_path_segments(uri: str) -> str:
+    """Strip trailing spaces/dots from every path segment of a memory URI.
+
+    Windows filesystems cannot create names ending in spaces or dots: the OS
+    silently strips them, so a template-rendered segment like ``"Desktop "``
+    materializes as ``Desktop`` while the RAGFS lock-token path keeps the
+    space, and every subsequent write fails with a lock I/O error. Normalizing
+    segments at URI-generation time keeps the logical URI aligned with what
+    the filesystem can actually materialize on every platform. A non-empty
+    segment reduced to nothing falls back to ``_`` so paths never gain empty
+    components.
+    """
+    scheme_sep = "://"
+    if scheme_sep not in uri:
+        head, tail = "", uri
+    else:
+        scheme, _, rest = uri.partition(scheme_sep)
+        head, tail = f"{scheme}{scheme_sep}", rest
+    cleaned_segments = []
+    for segment in tail.split("/"):
+        stripped = _TRAILING_FS_UNSAFE_RE.sub("", segment)
+        cleaned_segments.append(stripped if stripped or not segment else "_")
+    return head + "/".join(cleaned_segments)
 
 
 def validate_uri_template(memory_type: MemoryTypeSchema) -> bool:

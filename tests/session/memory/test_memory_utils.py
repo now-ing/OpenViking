@@ -141,6 +141,101 @@ class TestUriGeneration:
         with pytest.raises(ValueError, match="has None value"):
             generate_uri(memory_type, {"topic": None})
 
+    def test_generate_uri_strips_windows_unsafe_trailing_chars(self):
+        """Trailing spaces/dots in rendered segments are stripped (#4308).
+
+        Windows drops trailing spaces/dots when creating paths while RAGFS
+        lock-token paths keep them, which fails memory extraction with a lock
+        I/O error. The generated URI must already be materializable.
+        """
+        memory_type = MemoryTypeSchema(
+            memory_type="scratch",
+            description="Scratch memory",
+            directory="viking://user/{{ user_space }}/memories/scratch",
+            filename_template="{{ name }}",
+            fields=[],
+        )
+
+        uri = generate_uri(
+            memory_type,
+            {"name": "Desktop "},
+            user_space="default",
+        )
+
+        assert uri == "viking://user/default/memories/scratch/Desktop"
+
+    def test_generate_uri_strips_trailing_space_in_split_segment(self):
+        """A field containing '/' splits into segments, each one sanitized."""
+        memory_type = MemoryTypeSchema(
+            memory_type="events",
+            description="Event memory",
+            directory="viking://user/{{ user_space }}/memories/events",
+            filename_template="2026/07/30/{{ event_name }}.md",
+            fields=[],
+        )
+
+        uri = generate_uri(
+            memory_type,
+            {"event_name": "Desktop /new report"},
+            user_space="default",
+        )
+
+        assert (
+            uri == "viking://user/default/memories/events/2026/07/30/Desktop/new report.md"
+        )
+
+    def test_generate_uri_trailing_dots_stripped_in_directory_segment(self):
+        memory_type = MemoryTypeSchema(
+            memory_type="events",
+            description="Event memory",
+            directory="viking://user/{{ user_space }}/memories/events",
+            filename_template="2026/07/30/{{ event_name }}.md",
+            fields=[],
+        )
+
+        uri = generate_uri(
+            memory_type,
+            {"event_name": "release../summary"},
+            user_space="default",
+        )
+
+        assert uri == "viking://user/default/memories/events/2026/07/30/release/summary.md"
+
+    def test_generate_uri_segment_reduced_to_nothing_gets_placeholder(self):
+        memory_type = MemoryTypeSchema(
+            memory_type="events",
+            description="Event memory",
+            directory="viking://user/{{ user_space }}/memories/events",
+            filename_template="2026/07/30/{{ event_name }}.md",
+            fields=[],
+        )
+
+        uri = generate_uri(
+            memory_type,
+            {"event_name": "   /notes"},
+            user_space="default",
+        )
+
+        assert uri == "viking://user/default/memories/events/2026/07/30/_/notes.md"
+
+    def test_generate_uri_clean_values_unchanged(self):
+        """Normal field values keep producing identical URIs."""
+        memory_type = MemoryTypeSchema(
+            memory_type="preferences",
+            description="User preference memory",
+            directory="viking://user/{{ user_space }}/memories/preferences",
+            filename_template="{{ topic }}.md",
+            fields=[],
+        )
+
+        uri = generate_uri(
+            memory_type,
+            {"topic": "Python code style"},
+            user_space="default",
+        )
+
+        assert uri == "viking://user/default/memories/preferences/Python code style.md"
+
     def test_validate_uri_template_valid(self):
         """Test validating a valid URI template."""
         memory_type = MemoryTypeSchema(
