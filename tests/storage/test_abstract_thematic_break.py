@@ -49,6 +49,33 @@ def test_plain_overview_still_extracts_first_section() -> None:
     assert _extract(content) == "First paragraph.\nSecond line."
 
 
+def test_inline_brief_heading_yields_body_after_label() -> None:
+    content = "### Directory\n#### wiki\n\n---\n\n#### Brief Description: This directory contains public-service and legal-aid documents.\n"
+    assert _extract(content) == "This directory contains public-service and legal-aid documents."
+
+
+def test_inline_brief_heading_fullwidth_colon_zh() -> None:
+    content = "#### \u7b80\u8981\u63cf\u8ff0\uff1a\u672c\u76ee\u5f55\u5305\u542b\u516c\u5171\u670d\u52a1\u4e0e\u6cd5\u5f8b\u63f4\u52a9\u6587\u6863\u3002"
+    assert _extract(content) == "\u672c\u76ee\u5f55\u5305\u542b\u516c\u5171\u670d\u52a1\u4e0e\u6cd5\u5f8b\u63f4\u52a9\u6587\u6863\u3002"
+
+
+def test_heading_of_any_level_ends_abstract_section() -> None:
+    content = (
+        "#### Brief Description:\nPart one.\n\n#### Notes\nstray notes text\n"
+    )
+    assert _extract(content) == "Part one."
+
+
+def test_spaced_thematic_break_variant_is_skipped() -> None:
+    content = "### Directory\n#### wiki\n\n- - -\n\nFirst prose line.\n"
+    assert _extract(content) == "First prose line."
+
+
+def test_structural_headings_do_not_leak_into_abstract() -> None:
+    content = "### Directory\n#### wiki\n#### Brief Description:\nReal prose here.\n"
+    assert _extract(content) == "Real prose here."
+
+
 def test_thematic_break_inside_brief_description_is_skipped() -> None:
     content = "#### Brief Description:\nPart one.\n\n---\n\nPart two.\n\n## Next\nx"
     assert _extract(content) == "Part one.\nPart two."
