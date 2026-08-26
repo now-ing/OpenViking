@@ -1133,27 +1133,42 @@ class SemanticProcessor(DequeueHandlerBase):
 
         return candidate + "..."
 
+    _THEMATIC_BREAK_RE = re.compile(r"^\s*(?:-{3,}|\*{3,}|_{3,})\s*$")
+
     def _extract_abstract_from_overview(self, overview_content: str) -> str:
-        """Extract an abstract from the Markdown overview brief description."""
+        """Extract an abstract from the Markdown overview brief description.
+
+        Headings, blank lines and Markdown thematic breaks before the first
+        prose line are structural decoration (title block, separators) and are
+        skipped; extraction stops at the first ``##`` heading after prose has
+        started. This prevents a bare ``---`` separator from becoming the whole
+        abstract (issue #4336), which the semantic-sidecar parser would then
+        misread as unclosed YAML frontmatter.
+        """
         overview_content = body_for_preview(overview_content)
         lines = overview_content.split("\n")
 
-        # Skip header lines (starting with #)
-        content_lines = []
-        in_header = True
+        content_lines: List[str] = []
+        found_prose = False
 
         for line in lines:
-            if in_header and line.startswith("#"):
-                continue
-            elif in_header and line.strip():
-                in_header = False
+            stripped = line.strip()
+            is_heading = line.startswith("#")
+            is_break = bool(self._THEMATIC_BREAK_RE.match(line))
 
-            if not in_header:
-                # Stop at first ##
-                if line.startswith("##"):
-                    break
-                if line.strip():
-                    content_lines.append(line.strip())
+            if not found_prose:
+                if is_heading or is_break or not stripped:
+                    continue
+                found_prose = True
+                content_lines.append(stripped)
+                continue
+
+            # Stop at first ## after the brief description has started
+            if line.startswith("##"):
+                break
+            if is_break or not stripped:
+                continue
+            content_lines.append(stripped)
 
         return "\n".join(content_lines).strip()
 
