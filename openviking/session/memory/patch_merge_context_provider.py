@@ -10,6 +10,7 @@ from typing import Any
 
 from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import MemoryFile, MemoryTypeSchema
+from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.session_extract_context_provider import (
     SessionExtractContextProvider,
 )
@@ -121,12 +122,19 @@ class PatchMergeContextProvider(SessionExtractContextProvider):
         patches: list[PatchMergePatch],
         required_file_uris: list[str] | None = None,
         output_language: str | None = None,
+        registry_factory: Any = None,
+        schema_memory_type: str | None = None,
     ):
         super().__init__(messages=[])
         self.memory_type = memory_type
         self.required_file_uris = list(required_file_uris or [])
         self.patches = list(patches)
         self._output_language = output_language or _resolve_patch_output_language(self.patches)
+        self._registry_factory = registry_factory
+        # Schema-registry key when it differs from the trainer-level memory_type
+        # (e.g. gradients carry "skills" while the skill registry registers
+        # "session_skills"; see compressor_v3's session-skill trainer).
+        self._schema_memory_type = schema_memory_type
 
     def instruction(self) -> str:
         output_language = self._output_language
@@ -153,10 +161,19 @@ is an existing file, put it in delete_ids; if it is only a new proposal, omit it
 
     def get_memory_schemas(self, ctx: RequestContext) -> list[MemoryTypeSchema]:
         del ctx
-        schema = self._get_registry().get(self.memory_type)
+        schema_key = self._schema_memory_type or self.memory_type
+        schema = self._get_registry().get(schema_key)
         if schema is None or not schema.enabled:
-            raise ValueError(f"Memory schema not found or disabled: {self.memory_type}")
+            raise ValueError(f"Memory schema not found or disabled: {schema_key}")
         return [schema]
+
+    def _get_registry(self) -> "MemoryTypeRegistry":
+        if self._registry is None:
+            if self._registry_factory is not None:
+                self._registry = self._registry_factory()
+            else:
+                self._registry = MemoryTypeRegistry(load_schemas=True)
+        return self._registry
 
     async def prefetch(self) -> list[dict[str, Any]]:
         messages: list[dict[str, Any]] = []

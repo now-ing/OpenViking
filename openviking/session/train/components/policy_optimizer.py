@@ -48,6 +48,13 @@ class PatchMergePolicyOptimizer:
     viking_fs: Any = None
     vlm: Any = None
     memory_type: str = "experiences"
+    # Optional override for the memory-schema registry the provider queries
+    # (default: general MemoryTypeRegistry). The session-skill trainer passes
+    # load_skill_extract_registry because its schema only exists there.
+    registry_factory: Any = None
+    # Registry lookup key when it differs from memory_type ("skills" gradients
+    # resolve against the "session_skills" schema key).
+    schema_memory_type: str | None = None
 
     @tracer(
         "train.policy_optimizer.patch_merge.plan",
@@ -130,6 +137,8 @@ class PatchMergePolicyOptimizer:
             memory_type=self.memory_type,
             required_file_uris=_required_file_uris(gradients, policy_set),
             patches=[_gradient_to_merge_patch(gradient) for gradient in gradients],
+            registry_factory=self.registry_factory,
+            schema_memory_type=self.schema_memory_type,
         )
         provider._ctx = context.request_context
         provider._viking_fs = viking_fs

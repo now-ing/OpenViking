@@ -78,6 +78,10 @@ from openviking.session.train import (
     get_streaming_policy_trainer,
     make_streaming_policy_trainer_key,
 )
+from openviking.session.skill.session_skill_context_provider import (
+    SESSION_SKILL_MEMORY_TYPE,
+    load_skill_extract_registry,
+)
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import get_current_telemetry, tracer
 from openviking_cli.utils import get_logger
@@ -837,6 +841,12 @@ class SessionCompressorV3:
             policy_optimizer=PatchMergePolicyOptimizer(
                 viking_fs=viking_fs,
                 memory_type="skills",
+                # Gradients carry the trainer-level type "skills", but that
+                # schema only exists (as "session_skills") in the dedicated
+                # skill_extract registry — the general registry raises
+                # "Memory schema not found or disabled: skills" (issue #4368).
+                registry_factory=load_skill_extract_registry,
+                schema_memory_type=SESSION_SKILL_MEMORY_TYPE,
             ),
             policy_updater=SkillPolicyUpdater(
                 skill_processor=self.skill_processor,
