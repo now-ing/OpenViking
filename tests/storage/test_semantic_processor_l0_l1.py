@@ -50,6 +50,78 @@ def test_markdown_overview_extracts_multiline_brief_description(monkeypatch):
     assert abstract == "This is the first abstract line.\nThis is the second abstract line."
 
 
+def test_abstract_extraction_skips_leading_thematic_break(monkeypatch):
+    """A leading thematic break must never become the abstract (#4336)."""
+    _patch_semantic_limits(monkeypatch)
+    processor = SemanticProcessor()
+    generated = (
+        "### Directory\n"
+        "#### wiki\n"
+        "---\n"
+        "#### Brief Description: This directory contains public-service and legal-aid documents.\n"
+    )
+
+    _, abstract = processor._normalize_overview_generation(generated)
+
+    assert abstract == "This directory contains public-service and legal-aid documents."
+
+
+def test_abstract_extraction_skips_thematic_break_before_body(monkeypatch):
+    """Thematic break variants are structural, not abstract content (#4336)."""
+    _patch_semantic_limits(monkeypatch)
+    processor = SemanticProcessor()
+    generated = (
+        "# docs\n"
+        "***\n"
+        "_ _ _\n"
+        "-  -  -\n"
+        "The real brief description sentence.\n\n"
+        "## Quick Navigation\n"
+    )
+
+    _, abstract = processor._normalize_overview_generation(generated)
+
+    assert abstract == "The real brief description sentence."
+
+
+def test_abstract_extraction_returns_empty_for_structure_only_overview(monkeypatch):
+    """Heading/break-only output must yield an empty abstract, not '---' (#4336)."""
+    _patch_semantic_limits(monkeypatch)
+    processor = SemanticProcessor()
+    generated = "### Directory\n#### wiki\n---\n#### Brief Description\n"
+
+    _, abstract = processor._normalize_overview_generation(generated)
+
+    assert abstract == ""
+
+
+def test_abstract_extraction_fullwidth_colon_heading_label(monkeypatch):
+    """Chinese '简要描述：<正文>' headings also yield their inline body."""
+    _patch_semantic_limits(monkeypatch)
+    processor = SemanticProcessor()
+    generated = "### 目录\n#### wiki\n---\n#### 简要描述：本目录包含公共服务与法律援助文档。\n"
+
+    _, abstract = processor._normalize_overview_generation(generated)
+
+    assert abstract == "本目录包含公共服务与法律援助文档。"
+
+
+def test_abstract_extraction_stops_at_heading_after_body(monkeypatch):
+    """Any heading after the brief body ends the abstract section."""
+    _patch_semantic_limits(monkeypatch)
+    processor = SemanticProcessor()
+    generated = (
+        "# README\n\n"
+        "Brief body line.\n\n"
+        "### A nested section heading\n"
+        "Text that must not be collected.\n"
+    )
+
+    _, abstract = processor._normalize_overview_generation(generated)
+
+    assert abstract == "Brief body line."
+
+
 def test_index_references_are_replaced_inside_markdown_overview(monkeypatch):
     _patch_semantic_limits(monkeypatch)
     processor = SemanticProcessor()

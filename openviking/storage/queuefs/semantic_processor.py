@@ -57,6 +57,20 @@ from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+# CommonMark thematic break: three or more matching -, _ or * chars,
+# optionally separated by spaces or tabs (---, * * *, ___).
+_THEMATIC_BREAK_RE = re.compile(r"^ {0,3}([-_*])(?:[ \t]*\1){2,}[ \t]*$")
+_HEADING_RE = re.compile(r"^#{1,6}[ \t]+(.*)$")
+# Label prefix of a heading that carries its body inline, e.g.
+# "Brief Description: This directory contains ..." (also fullwidth colon).
+_HEADING_LABEL_RE = re.compile(r"^([^:：]{1,48})[:：][ \t]*(\S.*)$")
+
+
+def _split_heading_label(inline_text: str) -> Optional[str]:
+    """Return the body carried inline after a heading label, if any."""
+    match = _HEADING_LABEL_RE.match(inline_text.strip())
+    return match.group(2).strip() if match else None
+
 
 class RequestQueueStats:
     processed: int = 0
@@ -993,22 +1007,31 @@ class SemanticProcessor(DequeueHandlerBase):
         """Extract an abstract from the Markdown overview brief description."""
         lines = overview_content.split("\n")
 
-        # Skip header lines (starting with #)
-        content_lines = []
+        content_lines: List[str] = []
         in_header = True
 
         for line in lines:
-            if in_header and line.startswith("#"):
+            if _THEMATIC_BREAK_RE.match(line):
+                # Structural, never content: a leading thematic break must not
+                # end the header block nor be collected as the abstract (#4336).
                 continue
-            elif in_header and line.strip():
-                in_header = False
 
-            if not in_header:
-                # Stop at first ##
-                if line.startswith("##"):
+            heading = _HEADING_RE.match(line)
+            if heading:
+                if not in_header:
+                    # The brief-description body has ended at the next heading.
                     break
-                if line.strip():
-                    content_lines.append(line.strip())
+                # A heading line that itself carries the brief text
+                # ("#### Brief Description: ...") yields the text after the label.
+                inline_brief = _split_heading_label(heading.group(1))
+                if inline_brief:
+                    content_lines.append(inline_brief)
+                    in_header = False
+                continue
+
+            if line.strip():
+                in_header = False
+                content_lines.append(line.strip())
 
         return "\n".join(content_lines).strip()
 

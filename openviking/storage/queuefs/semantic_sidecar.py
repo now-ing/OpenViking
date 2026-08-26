@@ -2,12 +2,33 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Shared writeback for semantic sidecar files."""
 
+import re
 from typing import Any, Callable, Dict, Optional
 
 from openviking.server.identity import RequestContext
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+_THEMATIC_BREAK_RE = re.compile(r"^ {0,3}([-_*])(?:[ \t]*\1){2,}[ \t]*$")
+
+
+def has_retrievable_abstract_text(text: str) -> bool:
+    """True if the abstract contains at least one non-structural text line.
+
+    A bare thematic break (``---``) or heading-only content would persist a
+    structurally invalid sidecar: the reader treats a leading ``---`` as an
+    opening frontmatter delimiter and fails with "frontmatter is not closed"
+    (#4336). Such content must not be written at all.
+    """
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or _THEMATIC_BREAK_RE.match(stripped):
+            continue
+        if stripped.startswith("#"):
+            continue
+        return True
+    return False
 
 
 async def write_semantic_sidecars(
@@ -60,6 +81,13 @@ async def _write_sidecars(
         ctx=ctx,
         lease_ref=lease_ref,
     )
+    if not has_retrievable_abstract_text(abstract):
+        logger.warning(
+            "[SemanticSidecar] Skipping content-free abstract for %s "
+            "(no retrievable text; would break sidecar parsing)",
+            dir_uri,
+        )
+        return
     await viking_fs.write_file(
         f"{dir_uri}/.abstract.md",
         abstract,
