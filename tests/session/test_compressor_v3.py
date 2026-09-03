@@ -1859,3 +1859,37 @@ def test_report_extraction_telemetry_tolerates_placeholder_error_uris(monkeypatc
     assert recorded["memory.extract.failed"] == 2
     assert recorded["memory.extract.by_type.events.created"] == 1
     assert recorded["memory.extract.by_type.unknown.failed"] == 2
+
+
+def test_report_extraction_telemetry_tolerates_placeholder_deleted_uris(monkeypatch):
+    """Deleted/skipped rows can carry the same placeholders as errors (#4492).
+
+    A delete recorded against a placeholder target (batch rollback paths)
+    must degrade to "unknown" in telemetry, not raise — the same invariant
+    the error-path regression pins, on the remaining actions.
+    """
+    recorded: dict = {}
+
+    class _StubTelemetry:
+        def set(self, key: str, value) -> None:
+            recorded[key] = value
+
+    monkeypatch.setattr(
+        "openviking.session.compressor_v3.get_current_telemetry",
+        lambda: _StubTelemetry(),
+    )
+
+    result = MemoryUpdateResult()
+    result.deleted_uris.append("events(page_id=rollback)")
+    result.skipped_operations.append({"memory_type": "skills(page_id=3)"})
+    operations = ResolvedOperations(
+        upsert_operations=[], delete_file_contents=[], errors=[]
+    )
+
+    # Must not raise despite the non-viking:// placeholders on deleted/skipped.
+    _report_extraction_telemetry(result, operations)
+
+    assert recorded["memory.extract.deleted"] == 1
+    assert recorded["memory.extract.skipped"] == 1
+    assert recorded["memory.extract.by_type.unknown.deleted"] == 1
+    assert recorded["memory.extract.by_type.unknown.skipped"] == 1

@@ -1751,3 +1751,17 @@ def test_memory_type_from_uri_tolerates_non_viking_placeholders():
         MemoryUpdater.memory_type_from_uri("viking://user/u/memories/events/e1.md")
         == "events"
     )
+
+
+def test_memory_type_from_uri_placeholder_edge_matrix():
+    """Harder placeholder shapes observed in failure paths (#4492 follow-up).
+
+    Whitespace-only targets, wrong-scheme or malformed prefixes, and
+    case-variants must all degrade to None rather than raise, so a single
+    bad URI can never flip session_commit to failed via telemetry/diff.
+    """
+    assert MemoryUpdater.memory_type_from_uri("   ") is None
+    assert MemoryUpdater.memory_type_from_uri("VIKING://user/u/memories/events/e.md") is None
+    assert MemoryUpdater.memory_type_from_uri("viking:/user/u/memories/events/e.md") is None
+    assert MemoryUpdater.memory_type_from_uri("skills(page_id=7)") is None
+    assert MemoryUpdater.memory_type_from_uri("viking://user/u/memories/events/e1.md") == "events"
