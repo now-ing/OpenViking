@@ -256,3 +256,29 @@ async def test_commit_if_needed_does_not_retry_non_transient_errors(tmp_path):
         await replayer.commit_if_needed("claude_code", _ref())
     assert client.commit_calls == 1
     assert store.get("claude_code", "s1").needs_commit is True
+
+
+async def test_threshold_commit_retries_transient_unavailability(tmp_path):
+    """maybe_commit_on_threshold routes through the same retry (#4494)."""
+    client = _FlakyCommitReplay(pending=500, failures=1)
+    store = CursorStore(tmp_path)
+    replayer = SessionReplayer(client, store, commit_retry_delays=(0.0,))
+
+    committed = await replayer.maybe_commit_on_threshold(
+        "claude_code", _ref(), threshold=100
+    )
+    assert committed is True
+    assert client.commit_calls == 2  # 1 transient failure + success
+    assert client.committed == ["import__claude_code__s1"]
+
+
+async def test_threshold_commit_no_retry_below_threshold(tmp_path):
+    client = _FlakyCommitReplay(pending=50, failures=99)
+    store = CursorStore(tmp_path)
+    replayer = SessionReplayer(client, store, commit_retry_delays=(0.0,))
+
+    committed = await replayer.maybe_commit_on_threshold(
+        "claude_code", _ref(), threshold=100
+    )
+    assert committed is False
+    assert client.commit_calls == 0
