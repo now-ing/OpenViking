@@ -70,3 +70,27 @@ def test_zero_budget_disables_clamp(budget_config):
     provider = SessionExtractContextProvider(messages=list(msgs))
     kept = provider._apply_session_extract_budget(provider.messages)
     assert len(kept) == 10
+
+
+@pytest.mark.asyncio
+async def test_prepare_extraction_messages_applies_budget(budget_config, monkeypatch):
+    """The clamp runs inside prepare(), after vision normalization."""
+    budget_config(2500)
+
+    async def fake_replace(messages, get_vlm=None, logger=None):
+        return list(messages)
+
+    monkeypatch.setattr(
+        "openviking.session.memory.session_extract_context_provider"
+        ".replace_image_parts_with_descriptions",
+        fake_replace,
+    )
+    msgs = [_message(i, "y" * 1000) for i in range(10)]
+    provider = SessionExtractContextProvider(messages=msgs)
+    provider._vision_vlm = None
+
+    await provider.prepare_extraction_messages()
+
+    assert len(provider.messages) == 2  # 2 x 1000 <= 2500 < 3 x 1000
+    assert [m.id for m in provider.messages] == ["msg-8", "msg-9"]
+    assert provider._vision_messages_prepared is True
