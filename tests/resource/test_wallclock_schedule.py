@@ -125,3 +125,33 @@ def test_to_dict_includes_schedule_fields():
     data = task.to_dict()
     assert data["schedule_time"] == "01:00"
     assert data["schedule_timezone"] == "Asia/Shanghai"
+
+
+# ---------- DST correctness ----------
+
+
+def test_wallclock_across_spring_forward():
+    # America/New_York springs forward 2026-03-08 02:00 -> 03:00; a 01:00
+    # schedule still resolves to the next real 01:00 (Mar 9), never the
+    # nonexistent Mar 8 02:00-03:00 window.
+    task = _task(schedule_time="01:00", schedule_timezone="America/New_York")
+    nxt = task.calculate_next_execution_time(now=_utc(datetime(2026, 3, 7, 12, 0, 0)))
+    assert _to_utc(nxt) == datetime(2026, 3, 8, 6, 0, 0, tzinfo=None)  # 01:00 EST = 06:00 UTC
+
+
+def test_wallclock_after_spring_forward_gap():
+    # Just past the gap (Mar 8 07:00 UTC = 02:00 EST->EDT local), the next
+    # 01:00 local occurrence is Mar 9 01:00 EDT = 05:00 UTC.
+    task = _task(schedule_time="01:00", schedule_timezone="America/New_York")
+    nxt = task.calculate_next_execution_time(now=_utc(datetime(2026, 3, 8, 7, 0, 0)))
+    assert _to_utc(nxt) == datetime(2026, 3, 9, 5, 0, 0, tzinfo=None)
+
+
+def test_wallclock_across_fall_back():
+    # America/New_York falls back 2026-11-01 02:00 -> 01:00; 01:30 exists
+    # twice (01:30 EDT = 05:30 UTC, then 01:30 EST = 06:30 UTC). At 06:00 UTC
+    # (= 02:00 EDT) the second occurrence is still ahead, so the next run is
+    # the same day's 01:30 EST.
+    task = _task(schedule_time="01:30", schedule_timezone="America/New_York")
+    nxt = task.calculate_next_execution_time(now=_utc(datetime(2026, 11, 1, 6, 0, 0)))
+    assert _to_utc(nxt) == datetime(2026, 11, 1, 6, 30, 0, tzinfo=None)
