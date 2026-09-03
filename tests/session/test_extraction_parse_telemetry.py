@@ -188,14 +188,19 @@ def test_parse_stats_reach_finished_summary_contract():
     }
 
 
-def test_parse_stats_bridge_maps_to_prometheus_counters():
+def test_parse_stats_bridge_maps_to_prometheus_counters(monkeypatch):
     from openviking.metrics.collectors.telemetry_bridge import TelemetryBridgeCollector
     from openviking.metrics.core.registry import MetricRegistry
     from openviking.metrics.datasources.base import EventMetricDataSource
     from openviking.metrics.exporters.prometheus import PrometheusExporter
 
     summary = _finished_summary_with_parse_stats(
-        {"failure_kind": "parse_error", "exhausted": True}
+        {
+            "failure_kind": "parse_error",
+            "format_retries_used": 1,
+            "iterations_used": 4,
+            "exhausted": True,
+        }
     )
     registry = MetricRegistry()
     collector = TelemetryBridgeCollector()
@@ -204,15 +209,15 @@ def test_parse_stats_bridge_maps_to_prometheus_counters():
     def _emit(event_name, payload):
         captured.append((event_name, payload))
 
-    EventMetricDataSource._emit = staticmethod(_emit)
-    try:
-        from openviking.metrics.datasources.telemetry_bridge import (
-            TelemetryBridgeEventDataSource,
-        )
+    # monkeypatch keeps the original staticmethod descriptor and restores it on
+    # teardown; assigning + `del` would permanently drop the production _emit.
+    monkeypatch.setattr(EventMetricDataSource, "_emit", staticmethod(_emit))
+    from openviking.metrics.datasources.telemetry_bridge import (
+        TelemetryBridgeEventDataSource,
+    )
 
-        TelemetryBridgeEventDataSource.record_summary(summary)
-    finally:
-        del EventMetricDataSource._emit
+    TelemetryBridgeEventDataSource.record_summary(summary)
+    assert EventMetricDataSource._emit is not None
     for event_name, payload in captured:
         collector.receive_hook(event_name, payload, registry)
 
@@ -220,6 +225,27 @@ def test_parse_stats_bridge_maps_to_prometheus_counters():
     assert 'failure_kind="parse_error"' in text
     assert "openviking_memory_parse_failures_total" in text
     assert "openviking_memory_parse_exhausted_total" in text
+    # aggregate-safe surfaces for "4 iterations used, 1 format retry"
+    assert "openviking_memory_parse_iterations_bucket" in text
+    assert "openviking_memory_parse_format_retries_bucket" in text
+    assert 'le="4.0"' in text  # 4-iteration observation lands in the le=4 bucket
+    assert 'le="1.0"' in text  # 1 format-retry observation lands in the le=1 bucket
+
+
+def test_bridge_emit_patch_restored_after_test(monkeypatch):
+    """The bridge test must not leak a stubbed _emit into later tests (review follow-up)."""
+    from openviking.metrics.datasources.base import EventMetricDataSource
+
+    original = EventMetricDataSource.__dict__.get("_emit")
+    assert original is not None, "production _emit must exist on the class"
+
+    def _stub(event_name, payload):
+        return None
+
+    monkeypatch.setattr(EventMetricDataSource, "_emit", staticmethod(_stub))
+    assert EventMetricDataSource.__dict__["_emit"] is not original
+    # monkeypatch teardown restores the original descriptor; the next test that
+    # calls record_summary() sees the production emitter again.
 
 
 def test_parse_stats_failure_then_recovery_clears_failure_kind():
