@@ -47,6 +47,33 @@ def test_queue_collector_maps_status(monkeypatch):
     assert 'openviking_queue_errors_total{queue="semantic"} 2' in text
 
 
+def test_queue_collector_preinitializes_counter_series_at_zero(monkeypatch):
+    class DummyQueueStatus:
+        def __init__(
+            self, pending: int, in_progress: int, processed: int, error_count: int
+        ) -> None:
+            self.pending = pending
+            self.in_progress = in_progress
+            self.processed = processed
+            self.error_count = error_count
+
+    class DummyQueueManager:
+        async def check_status(self):
+            return {"AddResource": DummyQueueStatus(1, 0, 0, 0)}
+
+    monkeypatch.setattr(
+        "openviking.metrics.datasources.queue.get_queue_manager",
+        lambda: DummyQueueManager(),
+    )
+    registry = MetricRegistry()
+    QueueCollector(data_source=QueuePipelineStateDataSource()).collect(registry)
+    text = PrometheusExporter(registry=registry).render()
+    # Regression for #4500: series must be scraped at zero before the first increment so
+    # Prometheus `increase()` does not miss the first error of each queue label set.
+    assert 'openviking_queue_errors_total{queue="AddResource"} 0' in text
+    assert 'openviking_queue_processed_total{queue="AddResource"} 0' in text
+
+
 def test_task_tracker_collector_maps_counts(monkeypatch):
     class DummyTracker:
         def snapshot_counts_by_type(self):
