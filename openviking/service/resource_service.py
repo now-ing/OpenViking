@@ -55,6 +55,7 @@ from openviking.server.user_config import (
     effective_skill_add_target,
 )
 from openviking.storage.acl import AclAction
+from openviking.storage.internal_names import is_rollback_safe_entry_name
 from openviking.storage.queuefs import QueueManager, get_queue_manager
 from openviking.storage.queuefs.add_resource_msg import AddResourcePhase
 from openviking.storage.viking_fs import LS_ALL_NODES, VikingFS
@@ -537,7 +538,14 @@ class ResourceService:
         ctx: RequestContext,
         resource_lock: Dict[str, Any],
     ) -> bool:
-        """Remove a newly reserved target only while it is still empty."""
+        """Remove a newly reserved target while it holds no real content.
+
+        Storage-internal markers (pathlock files, redirect/sync bookkeeping)
+        and ingest stub sidecars (``.abstract.md`` / ``.overview.md``) are
+        materialized while reserving a target, so they do not block rollback;
+        any other entry means real content (possibly from a concurrent writer)
+        and must preserve the directory (#4501).
+        """
         try:
             if not await self._viking_fs.exists(root_uri, ctx=ctx):
                 return True
@@ -550,7 +558,10 @@ class ResourceService:
                 node_limit=LS_ALL_NODES,
                 ctx=ctx,
             )
-            if any(entry.get("name") not in {None, "", ".", ".."} for entry in entries):
+            if any(
+                not is_rollback_safe_entry_name(str(entry.get("name") or ""))
+                for entry in entries
+            ):
                 return False
             await self._viking_fs.rm(
                 root_uri,
@@ -764,18 +775,38 @@ class ResourceService:
         stage_result = stage_callback("processing_queue")
         if inspect.isawaitable(stage_result):
             await stage_result
-        return await self._resource_processor.finish_prepared_resource(
-            msg.prepared,
-            ctx=ctx,
-            resource_lock=resource_lock,
-            summarize=msg.summarize,
-            build_index=msg.build_index,
-            processing_mode=msg.processing_mode,
-            **self._add_resource_ingest_tag_kwargs(
-                tags=msg.tags,
-                tag_mode=msg.tag_mode,
-            ),
-        )
+        try:
+            result = await self._resource_processor.finish_prepared_resource(
+                msg.prepared,
+                ctx=ctx,
+                resource_lock=resource_lock,
+                summarize=msg.summarize,
+                build_index=msg.build_index,
+                processing_mode=msg.processing_mode,
+                **self._add_resource_ingest_tag_kwargs(
+                    tags=msg.tags,
+                    tag_mode=msg.tag_mode,
+                ),
+            )
+        except BaseException:
+            if msg.cleanup_empty_target_on_failure and resource_lock is not None:
+                await self._cleanup_reserved_target_if_empty(
+                    root_uri=msg.root_uri,
+                    ctx=ctx,
+                    resource_lock=resource_lock,
+                )
+            raise
+        if (
+            result.get("status") == "error"
+            and msg.cleanup_empty_target_on_failure
+            and resource_lock is not None
+        ):
+            await self._cleanup_reserved_target_if_empty(
+                root_uri=msg.root_uri,
+                ctx=ctx,
+                resource_lock=resource_lock,
+            )
+        return result
 
     def _restore_source_task_auth(
         self,
@@ -1856,6 +1887,9 @@ class ResourceService:
                     job_phase=AddResourcePhase.POST_PROCESS,
                     root_uri=root_uri,
                     prepared=prepared,
+                    cleanup_empty_target_on_failure=not bool(
+                        prepared.get("target_preexisting")
+                    ),
                     source_path=str(
                         (kwargs.get("source_name") or "")
                         if kwargs.get("temp_file_id")
