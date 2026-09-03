@@ -21,7 +21,7 @@ sys.modules.setdefault("volcenginesdkarkruntime", _ark)
 sys.modules.setdefault("volcenginesdkarkruntime._exceptions", _ark_exc)
 
 from openviking.models.embedder.base import EmbedResult
-from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever
+from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever, RetrieverMode
 from openviking.server.identity import RequestContext, Role
 from openviking_cli.retrieve.types import TypedQuery
 from openviking_cli.session.user_id import UserIdentifier
@@ -39,6 +39,9 @@ class _LeafAwareProxy:
 
     async def collection_exists_bound(self):
         return True
+
+    async def search_children_in_tenant(self, *args, **kwargs):
+        return []
 
     async def search_in_tenant(self, **kwargs):
         level = kwargs.get("level")
@@ -131,6 +134,49 @@ async def test_explicit_level_excludes_leaf_query(monkeypatch):
     )
 
     assert all(q is not None and 2 not in q for q in _LeafAwareProxy.level_queries)
+    assert all(
+        "mem_test.md" not in c.uri for c in result.matched_contexts
+    )
+
+
+@pytest.mark.asyncio
+async def test_thinking_mode_queries_leaf_vectors_without_acl(monkeypatch):
+    """The fixed branch itself: THINKING's leaf query must not be ACL-gated."""
+    monkeypatch.setattr(
+        "openviking.retrieve.hierarchical_retriever.VikingDBManagerProxy",
+        _LeafAwareProxy,
+    )
+    retriever = HierarchicalRetriever(storage=_NoAclVectorStore(), embedder=_Embedder())
+
+    result = await retriever.retrieve(
+        TypedQuery(query="UNIQUEKEYWORD12345", context_type=None, intent=""),
+        ctx=_ctx(),
+        limit=5,
+        mode=RetrieverMode.THINKING,
+    )
+
+    assert (2,) in [q for q in _LeafAwareProxy.level_queries if q]  # L2 query issued
+    uris = [c.uri for c in result.matched_contexts]
+    assert "viking://user/u/memories/entities/mem_test.md" in uris
+
+
+@pytest.mark.asyncio
+async def test_thinking_mode_level_filter_skips_leaf_query(monkeypatch):
+    monkeypatch.setattr(
+        "openviking.retrieve.hierarchical_retriever.VikingDBManagerProxy",
+        _LeafAwareProxy,
+    )
+    retriever = HierarchicalRetriever(storage=_NoAclVectorStore(), embedder=_Embedder())
+
+    result = await retriever.retrieve(
+        TypedQuery(query="anything", context_type=None, intent=""),
+        ctx=_ctx(),
+        limit=5,
+        mode=RetrieverMode.THINKING,
+        level=[0, 1],
+    )
+
+    assert all(q != (2,) for q in _LeafAwareProxy.level_queries)
     assert all(
         "mem_test.md" not in c.uri for c in result.matched_contexts
     )
