@@ -216,6 +216,8 @@ async def _patch_impl(target: WatchTask, body: UpdateWatchRequest, ctx: RequestC
             is_active=body.is_active,
             reason=body.reason,
             instruction=body.instruction,
+            schedule_time=body.schedule_time,
+            schedule_timezone=body.schedule_timezone,
         )
     except wm_mod.PermissionDeniedError as e:
         raise _translate_perm(e, target.to_uri or target.task_id) from e
