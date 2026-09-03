@@ -159,3 +159,80 @@ def test_parse_stats_success_run_stays_clean():
     assert loop.parse_stats["iterations_used"] == 2
     assert loop.parse_stats["failure_kind"] is None
     assert loop.parse_stats["exhausted"] is False
+
+
+def _finished_summary_with_parse_stats(parse_stats: dict) -> dict:
+    """Drive the real OperationTelemetry → TelemetrySummaryBuilder path."""
+    from openviking.telemetry.operation import OperationTelemetry
+
+    t = OperationTelemetry(operation="session_commit", enabled=True)
+    t.set("memory.extract.parse.failure.parse_error", 1)
+    t.set("memory.extract.parse.format_retries_used", parse_stats.get("format_retries_used", 0))
+    t.set("memory.extract.parse.iterations_used", parse_stats.get("iterations_used", 0))
+    t.set("memory.extract.parse.exhausted", 1 if parse_stats.get("exhausted") else 0)
+    snapshot = t.finish()
+    assert snapshot is not None
+    return snapshot.summary
+
+
+def test_parse_stats_reach_finished_summary_contract():
+    summary = _finished_summary_with_parse_stats(
+        {"failure_kind": "parse_error", "format_retries_used": 1, "iterations_used": 4, "exhausted": True}
+    )
+    parse = summary["memory"]["extract"]["parse"]
+    assert parse == {
+        "failure_kind": "parse_error",
+        "format_retries_used": 1,
+        "iterations_used": 4,
+        "exhausted": 1,
+    }
+
+
+def test_parse_stats_bridge_maps_to_prometheus_counters():
+    from openviking.metrics.collectors.telemetry_bridge import TelemetryBridgeCollector
+    from openviking.metrics.core.registry import MetricRegistry
+    from openviking.metrics.datasources.base import EventMetricDataSource
+    from openviking.metrics.exporters.prometheus import PrometheusExporter
+
+    summary = _finished_summary_with_parse_stats(
+        {"failure_kind": "parse_error", "exhausted": True}
+    )
+    registry = MetricRegistry()
+    collector = TelemetryBridgeCollector()
+    captured = []
+
+    def _emit(event_name, payload):
+        captured.append((event_name, payload))
+
+    EventMetricDataSource._emit = staticmethod(_emit)
+    try:
+        from openviking.metrics.datasources.telemetry_bridge import (
+            TelemetryBridgeEventDataSource,
+        )
+
+        TelemetryBridgeEventDataSource.record_summary(summary)
+    finally:
+        del EventMetricDataSource._emit
+    for event_name, payload in captured:
+        collector.receive_hook(event_name, payload, registry)
+
+    text = PrometheusExporter(registry=registry).render()
+    assert 'failure_kind="parse_error"' in text
+    assert "openviking_memory_parse_failures_total" in text
+    assert "openviking_memory_parse_exhausted_total" in text
+
+
+def test_parse_stats_failure_then_recovery_clears_failure_kind():
+    """Attempt-level failure must not survive a successful parse (#4628 review)."""
+    loop = _bare_loop()
+    loop._record_parse_attempt(0, 3)
+    loop._record_parse_failure("parse_error")  # first attempt fails
+    loop._format_retry_count = 1
+    loop._record_format_retry()
+    loop._record_parse_attempt(1, 4)  # retry succeeds
+    loop._record_parse_recovery()
+
+    assert loop.parse_stats["failure_kind"] is None  # final response WAS parseable
+    assert loop.parse_stats["format_retries_used"] == 1  # retry usage still visible
+    assert loop.parse_stats["iterations_used"] == 2
+    assert loop.parse_stats["exhausted"] is False

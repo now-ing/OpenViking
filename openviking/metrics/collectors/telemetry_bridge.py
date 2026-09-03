@@ -101,6 +101,16 @@ class TelemetryBridgeCollector(EventMetricCollector):
     MEMORY_OPERATIONS_TOTAL: ClassVar[str] = MetricCollector.metric_name(
         DOMAIN_MEMORY, "operations", unit="total"
     )
+    # rule: <METRICS_NAMESPACE>_<DOMAIN_MEMORY>_parse_failures_total
+    # e.g.: openviking_memory_parse_failures_total
+    MEMORY_PARSE_FAILURES_TOTAL: ClassVar[str] = MetricCollector.metric_name(
+        DOMAIN_MEMORY, "parse_failures", unit="total"
+    )
+    # rule: <METRICS_NAMESPACE>_<DOMAIN_MEMORY>_parse_exhausted_total
+    # e.g.: openviking_memory_parse_exhausted_total
+    MEMORY_PARSE_EXHAUSTED_TOTAL: ClassVar[str] = MetricCollector.metric_name(
+        DOMAIN_MEMORY, "parse_exhausted", unit="total"
+    )
     # rule: <METRICS_NAMESPACE>_<DOMAIN_RESOURCE>_stage_total
     # e.g.: openviking_resource_stage_total
     RESOURCE_STAGE_TOTAL: ClassVar[str] = MetricCollector.metric_name(
@@ -284,6 +294,22 @@ class TelemetryBridgeCollector(EventMetricCollector):
                 label_names=("operation", "memory_type"),
                 amount=extracted,
             )
+
+        parse = extract.get("parse") or {}
+        if isinstance(parse, Mapping) and parse:
+            failure_kind = str(parse.get("failure_kind") or "")
+            if failure_kind:
+                registry.inc_counter(
+                    self.MEMORY_PARSE_FAILURES_TOTAL,
+                    labels={"operation": operation, "failure_kind": failure_kind},
+                    label_names=("operation", "failure_kind"),
+                )
+            if int(parse.get("exhausted", 0) or 0) > 0:
+                registry.inc_counter(
+                    self.MEMORY_PARSE_EXHAUSTED_TOTAL,
+                    labels={"operation": operation},
+                    label_names=("operation",),
+                )
 
         actions = extract.get("actions") or {}
         if isinstance(actions_by_type, Mapping) and actions_by_type:

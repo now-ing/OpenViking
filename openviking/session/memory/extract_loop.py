@@ -173,6 +173,14 @@ class ExtractLoop:
     def _record_parse_exhausted(self) -> None:
         self.parse_stats["exhausted"] = True
 
+    def _record_parse_recovery(self) -> None:
+        """Clear attempt-level failure once a parse finally succeeds.
+
+        parse_stats["failure_kind"] must mean "the FINAL response was
+        unparseable" (per the PR contract), not "some attempt failed".
+        """
+        self.parse_stats["failure_kind"] = None
+
         # Schema 生成器（在 run() 中初始化）
         self.schema_model_generator = None
 
@@ -396,6 +404,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
                         console=True,
                     )
                     continue
+                self._record_parse_recovery()
                 break
             # If no tool calls either, continue to next iteration (don't break!)
             failure_kind = self._last_llm_failure_kind or "unknown"
@@ -428,6 +437,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
                         "keeping the first-pass operations",
                         console=True,
                     )
+                    self._record_parse_recovery()
                     break
                 tracer.info(
                     "Memory extraction final response could not be parsed as JSON operations "
