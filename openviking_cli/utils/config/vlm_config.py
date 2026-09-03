@@ -651,6 +651,7 @@ class VLMConfig(BaseModel):
             "max_retries": self.max_retries,
             "timeout": self.timeout,
             "keepalive_expiry": self.keepalive_expiry,
+            "max_concurrent": self.max_concurrent,
             "provider": credential.provider,
             "thinking": self.thinking,
             "max_tokens": (
@@ -685,6 +686,7 @@ class VLMConfig(BaseModel):
             "max_retries": self.max_retries,
             "timeout": self.timeout,
             "keepalive_expiry": self.keepalive_expiry,
+            "max_concurrent": self.max_concurrent,
             "provider": name,
             "thinking": self.thinking,
             "max_tokens": self.max_tokens,

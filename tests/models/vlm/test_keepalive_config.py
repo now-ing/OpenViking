@@ -15,6 +15,18 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
+
+@pytest.fixture(autouse=True)
+def _no_proxy_env(monkeypatch):
+    """Keep client construction independent of the developer shell's proxy env.
+
+    ``openai.DefaultHttpxClient`` honors proxy environment variables; a local
+    SOCKS proxy without the optional ``socksio`` extra would otherwise fail
+    construction before the assertions run.
+    """
+    for var in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy", "NO_PROXY", "no_proxy"):
+        monkeypatch.delenv(var, raising=False)
+
 from openviking.models.vlm.backends.openai_vlm import (
     OpenAIVLM,
     _build_httpx_limits,
@@ -37,12 +49,20 @@ def test_vlm_config_rejects_negative_keepalive_expiry():
         VLMConfig(model="gpt-4o-mini", api_key="sk-x", keepalive_expiry=-1.0)
 
 
-def test_build_httpx_limits_overrides_keepalive_expiry():
-    limits = _build_httpx_limits(0.0)
+def test_build_httpx_limits_bounds_pool_to_concurrency():
+    limits = _build_httpx_limits(4, 0.0)
     assert limits.keepalive_expiry == 0.0
-    # Remaining limits stay aligned with the OpenAI SDK defaults.
-    assert limits.max_connections == 1000
-    assert limits.max_keepalive_connections == 100
+    # Pool is bound to the configured concurrency cap, mirroring the embedder
+    # side (0f58d62a); connections beyond the cap can never be used.
+    assert limits.max_connections == 4
+    assert limits.max_keepalive_connections == 4
+
+
+def test_build_httpx_limits_floors_pool_at_one():
+    limits = _build_httpx_limits(0, 30.0)
+    assert limits.max_connections == 1
+    assert limits.max_keepalive_connections == 1
+    assert limits.keepalive_expiry == 30.0
 
 
 def test_vlm_config_propagates_keepalive_expiry_to_backend_dict():
@@ -55,6 +75,7 @@ def test_vlm_config_propagates_keepalive_expiry_to_backend_dict():
     )
     config_dict = cfg._build_vlm_config_dict()
     assert config_dict["keepalive_expiry"] == 30.0
+    assert config_dict["max_concurrent"] == cfg.max_concurrent
 
 
 def _pool_keepalive_expiry(client) -> float:
@@ -76,6 +97,8 @@ def test_sync_client_injects_http_client_without_connection_reuse():
     http_client = fake.call_args.kwargs.get("http_client")
     assert isinstance(http_client, httpx.Client)
     assert _pool_keepalive_expiry(http_client) == 0.0
+    pool = http_client._transport._pool
+    assert pool._max_connections == 32  # VLMConfig.max_concurrent default
 
 
 def test_sync_client_respects_configured_keepalive_expiry():
@@ -93,6 +116,8 @@ def test_sync_client_respects_configured_keepalive_expiry():
 
     http_client = fake.call_args.kwargs.get("http_client")
     assert _pool_keepalive_expiry(http_client) == 60.0
+    pool = http_client._transport._pool
+    assert pool._max_keepalive_connections == 32
 
 
 def test_sync_client_keeps_configured_request_timeout():

@@ -49,19 +49,24 @@ def _is_reasoning_model(model: Optional[str]) -> bool:
     return any(name.startswith(p) for p in _REASONING_MODEL_PREFIXES)
 
 
-def _build_httpx_limits(keepalive_expiry: float) -> httpx.Limits:
-    """Build httpx connection limits with an explicit ``keepalive_expiry``.
+def _build_httpx_limits(max_concurrent: int, keepalive_expiry: float) -> httpx.Limits:
+    """Build connection-pool limits bound to the configured VLM concurrency.
 
-    The OpenAI SDK leaves ``keepalive_expiry`` at the httpx default of 5.0s.
-    A pooled keep-alive connection can outlive the server-side idle timeout,
-    and the next request that reuses it blocks until ``httpcore.ReadTimeout``
-    instead of the configured request timeout (#4464). ``keepalive_expiry=0``
-    disables connection reuse (one fresh connection per request); the
-    remaining limits match the OpenAI SDK defaults.
+    The pool follows the same bound-the-pool-to-the-concurrency-cap approach as
+    the embedder side (0f58d62a): connections beyond ``max_concurrent`` can
+    never be used simultaneously, so an unbounded pool only hides leaks.
+
+    ``keepalive_expiry`` is explicit because the OpenAI SDK leaves it at the
+    httpx default of 5.0s. A pooled keep-alive connection can outlive the
+    server-side idle timeout, and the next request that reuses it blocks until
+    ``httpcore.ReadTimeout`` instead of the configured request timeout (#4464).
+    ``keepalive_expiry=0`` disables connection reuse (one fresh connection per
+    request).
     """
+    pool_limit = max(1, int(max_concurrent))
     return httpx.Limits(
-        max_connections=1000,
-        max_keepalive_connections=100,
+        max_connections=pool_limit,
+        max_keepalive_connections=pool_limit,
         keepalive_expiry=keepalive_expiry,
     )
 
@@ -104,6 +109,7 @@ class OpenAIVLM(VLMBase):
         self.api_version = config.get("api_version")
         self.reasoning_effort = config.get("reasoning_effort", "low")
         self.keepalive_expiry = config.get("keepalive_expiry", 0.0)
+        self.max_concurrent = config.get("max_concurrent", 32)
 
     def get_client(self):
         """Get sync client"""
@@ -118,8 +124,8 @@ class OpenAIVLM(VLMBase):
                 self.extra_headers,
                 self.timeout,
             )
-            kwargs["http_client"] = httpx.Client(
-                limits=_build_httpx_limits(self.keepalive_expiry),
+            kwargs["http_client"] = openai.DefaultHttpxClient(
+                limits=_build_httpx_limits(self.max_concurrent, self.keepalive_expiry),
                 timeout=self.timeout,
             )
             if self.provider == "azure":
@@ -140,8 +146,8 @@ class OpenAIVLM(VLMBase):
             self.extra_headers,
             self.timeout,
         )
-        kwargs["http_client"] = httpx.AsyncClient(
-            limits=_build_httpx_limits(self.keepalive_expiry),
+        kwargs["http_client"] = openai.DefaultAsyncHttpxClient(
+            limits=_build_httpx_limits(self.max_concurrent, self.keepalive_expiry),
             timeout=self.timeout,
         )
         if self.provider == "azure":
