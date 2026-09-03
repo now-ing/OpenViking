@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""rm/mv path-lock acquires must wait for a busy tree instead of failing at 0ms.
+"""rm/mv/cp/append path-lock acquires must wait for busy locks instead of failing at 0ms.
 
 Regresssion guard for the CI flake seen on #4373: ``filesystem/test_fs_rm``
 creates a directory and immediately removes it; the zero-wait lock acquire
@@ -37,6 +37,8 @@ def _make_fs(monkeypatch, *, acquire_side_effect=None):
         pathlock_release=AsyncMock(),
         rm=AsyncMock(return_value={}),
         ls=AsyncMock(return_value=[]),
+        read=AsyncMock(side_effect=FileNotFoundError("no such file")),
+        write=AsyncMock(return_value="ok"),
     )
     monkeypatch.setattr(fs, "_async_agfs", agfs)
     monkeypatch.setattr(fs, "_ensure_access", AsyncMock(return_value=None))
@@ -101,3 +103,33 @@ async def test_mv_waits_for_busy_batch_lock(monkeypatch):
     assert agfs.pathlock_acquire_batch.await_count >= 1
     for call in agfs.pathlock_acquire_batch.await_args_list:
         assert call.kwargs.get("timeout_secs") == FS_OP_LOCK_ACQUIRE_WAIT_SECS
+
+
+@pytest.mark.asyncio
+async def test_cp_waits_for_busy_batch_lock(monkeypatch):
+    fs, agfs = _make_fs(monkeypatch)
+    agfs.stat = AsyncMock(return_value={"isDir": False})
+    monkeypatch.setattr(fs, "_ensure_copy_source_access", AsyncMock())
+    monkeypatch.setattr(fs, "_ensure_transfer_parent_directory", AsyncMock())
+    monkeypatch.setattr(fs, "_ensure_transfer_target_missing", AsyncMock())
+    monkeypatch.setattr(fs, "_copy_agfs_entry", AsyncMock(return_value={"files": 1}))
+
+    await fs.cp("viking:///resources/a.md", "viking:///resources/b-copy.md", ctx=None)
+
+    assert agfs.pathlock_acquire_batch.await_count >= 1
+    for call in agfs.pathlock_acquire_batch.await_args_list:
+        assert call.kwargs.get("timeout_secs") == FS_OP_LOCK_ACQUIRE_WAIT_SECS
+
+
+@pytest.mark.asyncio
+async def test_append_waits_for_busy_exact_lock(monkeypatch):
+    fs, agfs = _make_fs(monkeypatch)
+    monkeypatch.setattr(fs, "_ensure_parent_dirs", AsyncMock())
+
+    await fs.append_file("viking:///resources/docs/file.md", "more", ctx=None)
+
+    agfs.pathlock_acquire_exact.assert_awaited_once_with(
+        "/agfs/resources/docs/file.md", timeout_secs=FS_OP_LOCK_ACQUIRE_WAIT_SECS
+    )
+    agfs.pathlock_release.assert_awaited_once()
+    agfs.write.assert_awaited_once()

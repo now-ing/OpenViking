@@ -379,6 +379,7 @@ class _OpsMixin:
         )
         lease = await self._async_agfs.pathlock_acquire_batch(
             lock_requests,
+            timeout_secs=FS_OP_LOCK_ACQUIRE_WAIT_SECS,
             owner_lease_ref=lease_ref,
         )
         operation_id = uuid.uuid4().hex
@@ -1015,6 +1016,7 @@ class _OpsMixin:
         child_path = self._uri_to_path(to_uri, ctx=ctx)
         child_lease = await self._async_agfs.pathlock_acquire_exact(
             child_path,
+            timeout_secs=FS_OP_LOCK_ACQUIRE_WAIT_SECS,
             owner_lease_ref=lease_ref,
         )
         try:
@@ -1710,7 +1712,9 @@ class _OpsMixin:
             await self._ensure_parent_dirs(path, ctx=ctx, lease_ref=lease_ref)
             lease = lease_ref
             if lease is None:
-                lease = await self._async_agfs.pathlock_acquire_exact(path)
+                lease = await self._async_agfs.pathlock_acquire_exact(
+                    path, timeout_secs=FS_OP_LOCK_ACQUIRE_WAIT_SECS
+                )
                 owned_lease = lease
             fs_ctx = self._pathlock_fs_ctx(ctx, lease)
 
