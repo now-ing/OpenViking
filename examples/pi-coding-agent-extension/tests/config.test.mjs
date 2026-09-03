@@ -1,3 +1,4 @@
+import { deriveWorkspacePeerId } from "../shared/workspace-peer.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -126,7 +127,7 @@ test("loadConfig clamps invalid takeover values", async () => {
 test("loadConfig derives workspace peer by default", async () => {
   const oldCwd = process.cwd();
   await withConfigFile({}, (cfg) => {
-    assert.equal(cfg.peerId, oldCwd.replace(/[^A-Za-z0-9]/g, "-"));
+    assert.equal(cfg.peerId, deriveWorkspacePeerId(oldCwd));
     assert.equal(cfg.workspacePeer, true);
     assert.equal(cfg.recallPeerScope, "all");
   });
