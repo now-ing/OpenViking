@@ -841,7 +841,15 @@ class MemoryUpdater:
 
     @staticmethod
     def memory_type_from_uri(uri: str) -> Optional[str]:
-        parts = [part for part in VikingURI(uri).full_path.split("/") if part]
+        try:
+            parts = [part for part in VikingURI(uri).full_path.split("/") if part]
+        except ValueError:
+            # Non-viking:// placeholder (e.g. "unknown" or "events(page_id=3)"
+            # recorded into MemoryUpdateResult.errors by apply_operations) is
+            # not a parseable URI; report "no memory type" instead of raising.
+            # See issue #4492: telemetry crashed on these placeholders after
+            # memories were already written, failing the whole session_commit.
+            return None
         try:
             memories_idx = parts.index("memories")
         except ValueError:

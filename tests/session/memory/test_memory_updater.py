@@ -1733,3 +1733,21 @@ class TestConsecutivePatchesSameURI:
         assert "ALPHA" in parsed["content"]
         assert "BETA" in parsed["content"]
         assert "gamma" in parsed["content"]
+
+
+def test_memory_type_from_uri_tolerates_non_viking_placeholders():
+    """Regression test for issue #4492.
+
+    ``apply_operations`` records placeholder targets such as ``"unknown"``
+    (batch-level errors) and ``"{memory_type}(page_id=...)"`` (unresolved
+    operations) into ``MemoryUpdateResult.errors``. Parsing those must yield
+    ``None`` instead of raising ``ValueError`` so telemetry and diff helpers
+    can degrade them to "unknown".
+    """
+    assert MemoryUpdater.memory_type_from_uri("unknown") is None
+    assert MemoryUpdater.memory_type_from_uri("events(page_id=xyz)") is None
+    assert MemoryUpdater.memory_type_from_uri("") is None
+    assert (
+        MemoryUpdater.memory_type_from_uri("viking://user/u/memories/events/e1.md")
+        == "events"
+    )

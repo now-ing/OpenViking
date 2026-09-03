@@ -15,6 +15,7 @@ from openviking.session import create_session_compressor
 from openviking.session.compressor_v3 import (
     SessionCompressorV3,
     _commit_experience_snapshot,
+    _report_extraction_telemetry,
     _experience_root_uri,
     _experience_snapshot_provenance,
     _experience_trajectory_map,
@@ -1819,3 +1820,42 @@ async def test_v3_training_links_case_to_trajectory_and_experience_via_trajector
             "ctx": _ctx(),
         }
     ]
+
+
+def test_report_extraction_telemetry_tolerates_placeholder_error_uris(monkeypatch):
+    """Regression test for issue #4492.
+
+    ``MemoryUpdater.apply_operations`` records non-viking:// placeholder
+    targets (``"unknown"`` for batch-level errors and
+    ``"{memory_type}(page_id=...)"`` for unresolved operations) into
+    ``result.errors``. Telemetry must count them under "unknown" instead of
+    raising ``ValueError: URI must start with 'viking://'`` — the old eager
+    ``dict.get`` default crashed after memories were already written and
+    marked the whole session_commit as failed.
+    """
+    recorded: dict = {}
+
+    class _StubTelemetry:
+        def set(self, key: str, value) -> None:
+            recorded[key] = value
+
+    monkeypatch.setattr(
+        "openviking.session.compressor_v3.get_current_telemetry",
+        lambda: _StubTelemetry(),
+    )
+
+    result = MemoryUpdateResult()
+    result.add_written("viking://user/u/memories/events/e1.md")
+    result.add_error("unknown", ValueError("batch-level error"))
+    result.add_error("events(page_id=xyz)", ValueError("resolution failed"))
+    operations = ResolvedOperations(
+        upsert_operations=[], delete_file_contents=[], errors=[]
+    )
+
+    # Must not raise despite the non-viking:// placeholders above.
+    _report_extraction_telemetry(result, operations)
+
+    assert recorded["memory.extract.created"] == 1
+    assert recorded["memory.extract.failed"] == 2
+    assert recorded["memory.extract.by_type.events.created"] == 1
+    assert recorded["memory.extract.by_type.unknown.failed"] == 2
