@@ -85,6 +85,9 @@ class _FakeVikingFS:
         self.persist_calls = []
         self.delete_temp_calls = []
 
+    async def _ensure_access(self, uri, ctx=None, action=None):
+        return None
+
     def bind_request_context(self, ctx):
         return _CtxMgr()
 
