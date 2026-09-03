@@ -53,6 +53,8 @@ class UpdateWatchRequest(BaseModel):
     is_active: Optional[bool] = None
     reason: Optional[str] = None
     instruction: Optional[str] = None
+    schedule_time: Optional[str] = None
+    schedule_timezone: Optional[str] = None
 
     @field_validator("watch_interval")
     @classmethod
