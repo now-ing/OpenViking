@@ -20,6 +20,7 @@ sys.modules.setdefault("volcenginesdkarkruntime", _ark)
 sys.modules.setdefault("volcenginesdkarkruntime._exceptions", _ark_exc)
 
 from openviking.session.compressor_v3 import _report_extraction_telemetry
+from openviking.session.memory.extract_loop import ExtractLoop
 
 
 class _CaptureTelemetry:
@@ -101,3 +102,60 @@ def test_parse_stats_no_failure_kind_skips_kind_counter(monkeypatch):
     assert "memory.extract.parse.failure.refusal_text" not in captured.values
     assert captured.values["memory.extract.parse.iterations_used"] == 2
     assert captured.values["memory.extract.parse.exhausted"] == 0
+
+
+def _bare_loop():
+    """Construct an ExtractLoop without its heavy dependencies.
+
+    Only the parse-stats state is initialized; the recorder methods under
+    test touch nothing else.
+    """
+    loop = ExtractLoop.__new__(ExtractLoop)
+    loop.parse_stats = {
+        "failure_kind": None,
+        "format_retries_used": 0,
+        "iterations_used": 0,
+        "max_iterations": 0,
+        "exhausted": False,
+    }
+    loop._format_retry_count = 0
+    return loop
+
+
+def test_parse_stats_initial_shape():
+    loop = _bare_loop()
+    assert loop.parse_stats == {
+        "failure_kind": None,
+        "format_retries_used": 0,
+        "iterations_used": 0,
+        "max_iterations": 0,
+        "exhausted": False,
+    }
+
+
+def test_parse_stats_full_failure_lifecycle():
+    """failure -> retry -> more attempts -> exhaustion mirrors a zero-extraction run."""
+    loop = _bare_loop()
+    loop._record_parse_attempt(0, 3)
+    loop._record_parse_failure("parse_error")
+    loop._format_retry_count = 1
+    loop._record_format_retry()
+    loop._record_parse_attempt(3, 4)  # retry extended max_iterations
+    loop._record_parse_failure("refusal_text")
+    loop._record_parse_exhausted()
+
+    assert loop.parse_stats == {
+        "failure_kind": "refusal_text",  # last failure wins
+        "format_retries_used": 1,
+        "iterations_used": 4,
+        "max_iterations": 4,
+        "exhausted": True,
+    }
+
+
+def test_parse_stats_success_run_stays_clean():
+    loop = _bare_loop()
+    loop._record_parse_attempt(1, 3)
+    assert loop.parse_stats["iterations_used"] == 2
+    assert loop.parse_stats["failure_kind"] is None
+    assert loop.parse_stats["exhausted"] is False

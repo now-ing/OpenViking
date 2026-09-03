@@ -160,6 +160,19 @@ class ExtractLoop:
             "exhausted": False,
         }
 
+    def _record_parse_attempt(self, iteration: int, max_iterations: int) -> None:
+        self.parse_stats["iterations_used"] = iteration + 1
+        self.parse_stats["max_iterations"] = max_iterations
+
+    def _record_parse_failure(self, failure_kind: str) -> None:
+        self.parse_stats["failure_kind"] = failure_kind
+
+    def _record_format_retry(self) -> None:
+        self.parse_stats["format_retries_used"] = self._format_retry_count
+
+    def _record_parse_exhausted(self) -> None:
+        self.parse_stats["exhausted"] = True
+
         # Schema 生成器（在 run() 中初始化）
         self.schema_model_generator = None
 
@@ -283,9 +296,8 @@ The final output of the model must strictly follow the JSON Schema format shown 
         for uri in self.context_provider.read_file_contents:
             self._extract_context.page_id_map.get_page_id(uri)
 
-        self.parse_stats["max_iterations"] = max_iterations
         while iteration < max_iterations:
-            self.parse_stats["iterations_used"] = iteration + 1
+            self._record_parse_attempt(iteration, max_iterations)
             iteration += 1
             tracer.info(f"ReAct iteration {iteration}/{max_iterations}")
 
@@ -387,7 +399,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
                 break
             # If no tool calls either, continue to next iteration (don't break!)
             failure_kind = self._last_llm_failure_kind or "unknown"
-            self.parse_stats["failure_kind"] = failure_kind
+            self._record_parse_failure(failure_kind)
             failure_preview = _preview_text(self._last_llm_failure_content)
             tracer.error(
                 "LLM returned neither tool calls nor operations "
@@ -397,7 +409,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
             # Add format error message if parse failed (max 1 retry)
             if self._format_retry_count == 0:
                 self._format_retry_count += 1
-                self.parse_stats["format_retries_used"] = self._format_retry_count
+                self._record_format_retry()
                 max_iterations += 1
                 retry_reason = (
                     "refusal_text" if failure_kind == "refusal_text" else "format_retry"
@@ -422,7 +434,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
                     f"after {max_iterations} iterations — treating as no operations "
                     f"failure_kind={failure_kind} response_preview={failure_preview!r}"
                 )
-                self.parse_stats["exhausted"] = True
+                self._record_parse_exhausted()
                 final_operations = ResolvedOperations(
                     upsert_operations=[],
                     delete_file_contents=[],
