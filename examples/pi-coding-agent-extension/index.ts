@@ -19,6 +19,7 @@ import { RecallLedger } from "./shared/recall-ledger.mjs";
 import { SyncManager } from "./sync.js";
 import { buildProfileBlock } from "./shared/profile-inject.mjs";
 import { guardVikingUriToolCall } from "./lib/uri-guard-adapter.mjs";
+import { collectUserEntryIds } from "./lib/context-entries.mjs";
 import { registerTools } from "./tools.js";
 import { createTakeoverManager } from "./takeover.js";
 
@@ -184,10 +185,11 @@ export default async function (pi: ExtensionAPI) {
     // The context hook omits persisted entry ids, but its user messages are a
     // deep copy of the active SessionManager context. Associate those objects
     // with stable ids before takeover may filter the array; retained messages
-    // keep object identity through that transform.
-    const userEntryIds = ctx.sessionManager.buildContextEntries()
-      .filter((entry: any) => entry?.type === "message" && entry.message?.role === "user")
-      .map((entry: any) => entry.id as string);
+    // keep object identity through that transform. Hosts without
+    // buildContextEntries() (e.g. OMP 18.1.5) expose the same persisted
+    // entries via getBranch(); with neither API we skip stable-id mapping
+    // rather than throwing (#4652).
+    const userEntryIds = collectUserEntryIds(ctx.sessionManager);
     const messageIds = new WeakMap<object, string>();
     let userIndex = 0;
     for (const message of event.messages as any[]) {
