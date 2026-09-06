@@ -28,7 +28,6 @@ from openviking.session.memory.utils.line_numbers import (
     add_line_numbers,
     every_line_has_line_numbers,
     extract_start_line_number,
-    strip_display_prefixes,
     strip_line_numbers,
 )
 from openviking_cli.utils import get_logger
@@ -878,18 +877,19 @@ def _delete_complete_lines(content: str, delete_content: str) -> str:
 def _clean_replace_prefixes(search_content: str, replace_content: str) -> str:
     """Return REPLACE with numbered-view display prefixes removed (#4413).
 
-    When SEARCH itself is fully numbered, the block was copied from the
-    numbered read view, so REPLACE prefixes (when present on every line) are
-    display prefixes too, even when the numbers are non-consecutive (partial
-    copies). When SEARCH is clean, REPLACE is only stripped when it
-    independently forms a consecutive numbered view (single lines included),
-    which genuine tabular data almost never does.
+    Evidence-based: REPLACE prefixes are stripped only when SEARCH itself is
+    fully numbered, which proves the block was copied from the numbered read
+    view (partial copies with non-consecutive numbers included). When SEARCH
+    is clean, REPLACE is stored verbatim: consecutive numeric columns (years,
+    quarter indexes) are indistinguishable from display prefixes by shape
+    alone, and stripping them destroys genuine data — a stored display prefix
+    is recoverable noise, a stripped data column is not.
     """
     if every_line_has_line_numbers(search_content):
         if every_line_has_line_numbers(replace_content) or replace_content.strip() == "":
             return strip_line_numbers(replace_content)
         return replace_content
-    return strip_display_prefixes(replace_content)
+    return replace_content
 
 
 def _clean_block_prefixes(search_content: str, replace_content: str) -> tuple[str, str]:
