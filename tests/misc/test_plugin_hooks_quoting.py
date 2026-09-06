@@ -8,6 +8,7 @@ node loads /Users/<user>/Library/Application and every hook exits 1.
 """
 
 import json
+import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -19,24 +20,40 @@ _PLUGIN_HOOK_FILES = [
     "examples/cursor-memory-plugin/hooks/hooks.json",
 ]
 
+# The whole command must be `node "${VAR}/scripts/<name>.mjs"` — anchored so
+# unquoted interpolations, stray arguments, or trailing shell cannot pass.
+_COMMAND_SHAPE = re.compile(r'^node "\$\{[A-Z_]+\}/scripts/[^"\n]+\.mjs"$')
+
 
 def _hook_commands(rel_path: str):
     path = REPO_ROOT / rel_path
     data = json.loads(path.read_text(encoding="utf-8"))
     for event_entries in data.get("hooks", {}).values():
-        for matcher in event_entries:
-            for hook in matcher.get("hooks", []):
+        for entry in event_entries:
+            # Claude/Codex/ZCode schema: entry -> hooks[] -> {type: command}.
+            for hook in entry.get("hooks", []):
                 if hook.get("type") == "command":
                     yield hook["command"]
+            # Cursor schema: the entry itself carries the command.
+            if "command" in entry:
+                yield entry["command"]
 
 
-def test_every_hook_command_quotes_script_path():
+def test_extractor_finds_commands_in_every_plugin():
+    # cursor's hooks.json uses a flat event[].command schema; without this
+    # guard a schema drift would silently extract zero commands.
+    for rel_path in _PLUGIN_HOOK_FILES:
+        assert sum(1 for _ in _hook_commands(rel_path)) >= 1, (
+            f"{rel_path}: no hook commands extracted"
+        )
+
+
+def test_every_hook_command_is_a_quoted_node_invocation():
     for rel_path in _PLUGIN_HOOK_FILES:
         for command in _hook_commands(rel_path):
-            assert "${" in command, f"{rel_path}: command has no interpolation: {command}"
-            # Every ${VAR}/path interpolation inside a command must be quoted.
-            assert '"${' in command, f"{rel_path}: unquoted interpolation: {command}"
-            assert command.count('"') % 2 == 0, f"{rel_path}: unbalanced quotes: {command}"
+            assert _COMMAND_SHAPE.match(command), (
+                f'{rel_path}: command must match node "${{VAR}}/scripts/<name>.mjs": {command}'
+            )
 
 
 def test_codex_plugin_covers_all_five_lifecycle_hooks():
