@@ -85,6 +85,16 @@ class OpenAIVLM(VLMBase):
         self.api_version = config.get("api_version")
         self.reasoning_effort = config.get("reasoning_effort", "low")
 
+    def close(self) -> None:
+        """Close the sync client and every cached async client."""
+        if self._sync_client is not None:
+            try:
+                self._sync_client.close()
+            except Exception:
+                pass
+            self._sync_client = None
+        self._async_client_cache.close_all_with_close()
+
     def get_client(self):
         """Get sync client"""
         if self._sync_client is None:

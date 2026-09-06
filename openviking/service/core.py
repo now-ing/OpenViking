@@ -570,6 +570,20 @@ class OpenVikingService:
             self._embedder = None
             await asyncio.sleep(0)
 
+        # The VLM backend keeps its own loop-scoped clients; close them and
+        # drop the config-held instance so the whole chain is collectable
+        # (issue #4726).
+        vlm_config = getattr(self._config, "vlm", None)
+        close_vlm = getattr(vlm_config, "close_vlm_instance", None)
+        if callable(close_vlm):
+            close_vlm()
+
+        # Drop the process-wide singleton so the closed service's chain is
+        # not resolved (or kept alive) after close.
+        from openviking.storage.viking_fs import reset_viking_fs
+
+        reset_viking_fs()
+
         self._viking_fs = None
         self._resource_processor = None
         self._skill_processor = None

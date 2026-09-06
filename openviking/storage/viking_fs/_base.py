@@ -278,3 +278,18 @@ def get_viking_fs():
     if _instance is None:
         raise RuntimeError("VikingFS not initialized. Call init_viking_fs() first.")
     return _instance
+
+
+def reset_viking_fs() -> Optional["Any"]:
+    """Clear the module-level VikingFS singleton and return the prior instance.
+
+    A closed service leaves ``_instance`` set, keeping the whole
+    VikingFS -> embedder -> loop-scoped client chain reachable; the clients
+    then fail during garbage collection on whatever loop is running then
+    (issue #4726). Hosts that re-initialize OpenViking should call this on
+    shutdown so the chain can be collected.
+    """
+    global _instance
+    previous = _instance
+    _instance = None
+    return previous

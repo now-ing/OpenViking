@@ -81,6 +81,9 @@ class VLMBase(ABC):
         # Token usage tracking
         self._token_tracker = TokenUsageTracker()
 
+    def close(self) -> None:
+        """Release client resources held by this backend. Default no-op."""
+
     @abstractmethod
     def get_completion(
         self,
@@ -446,6 +449,17 @@ class FailoverVLM(VLMBase):
             failback_request_count=failback_request_count,
         )
 
+    def close(self) -> None:
+        """Close the primary and backup backends (best-effort)."""
+        for instance in (self.primary, self.backup):
+            closer = getattr(instance, "close", None)
+            if not callable(closer):
+                continue
+            try:
+                closer()
+            except Exception as exc:
+                self._logger.warning("Failed to close failover VLM backend: %s", exc)
+
     def _get_completion_with_failover(self, method_name: str, *args, **kwargs):
         """Execute a VLM method with failover support.
 
@@ -799,6 +813,7 @@ class MultiCredentialVLM(VLMBase):
         super().__init__(config)
 
         self._vlm_instances = vlm_instances
+
         self._credential_ids = credential_ids
         self._logger = logging.getLogger(__name__)
         self._switcher = OrderedCredentialSwitcher(
@@ -806,6 +821,19 @@ class MultiCredentialVLM(VLMBase):
             failback_timeout_seconds=failback_timeout_seconds,
             failback_request_count=failback_request_count,
         )
+
+    def close(self) -> None:
+        """Close every credential's backend (best-effort)."""
+        for instance in self._vlm_instances:
+            closer = getattr(instance, "close", None)
+            if not callable(closer):
+                continue
+            try:
+                closer()
+            except Exception as exc:
+                logging.getLogger(__name__).warning(
+                    "Failed to close multi-credential VLM backend: %s", exc
+                )
 
     def _get_completion_with_failover(self, method_name: str, *args, **kwargs):
         """Execute a VLM method with multi-credential failover support.

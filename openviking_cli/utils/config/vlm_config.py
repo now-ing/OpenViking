@@ -631,6 +631,27 @@ class VLMConfig(BaseModel):
 
         return self._vlm_instance
 
+    def close_vlm_instance(self) -> None:
+        """Close and drop the cached VLM instance so its clients are released.
+
+        Without this the instance (and its loop-scoped OpenAI clients) stays
+        reachable from the config singleton after the service is closed, and
+        garbage collection later fails on a dead event loop (issue #4726).
+        """
+        instance = self._vlm_instance
+        self._vlm_instance = None
+        if instance is None:
+            return
+        closer = getattr(instance, "close", None)
+        if not callable(closer):
+            return
+        try:
+            closer()
+        except Exception as exc:
+            import logging
+
+            logging.getLogger(__name__).warning("Failed to close VLM instance: %s", exc)
+
     def _build_vlm_config_dict_for_credential(self, credential: VLMCredential) -> Dict[str, Any]:
         """Build VLM instance config dict for a specific credential."""
         result = {

@@ -75,6 +75,7 @@ from openviking.storage.viking_fs._base import (
     enable_viking_fs_recorder,
     get_viking_fs,
     init_viking_fs,
+    reset_viking_fs,
     logger,
 )
 from openviking.storage.viking_fs._grep import _GrepMixin
