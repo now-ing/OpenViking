@@ -379,6 +379,48 @@ test("prefetch keeps the token-budget hint fallback intact", async () => {
   assert.equal(bodyLines[2], "- [memory 80%] viking://user/default/memories/events/three.md");
 });
 
+test("prefetch reads every body even when the budget floor is already spent", async () => {
+  const legacyCachePath = await tempPath("context-face.json");
+  const uris = [
+    "viking://user/default/memories/events/one.md",
+    "viking://user/default/memories/events/two.md",
+    "viking://user/default/memories/events/three.md",
+    "viking://user/default/memories/events/four.md",
+  ];
+  const memories = uris.map((uri, i) => ({
+    uri, score: 0.9 - i * 0.05, abstract: "", level: 2, category: "events",
+  }));
+  const reads = [];
+  const fetchJSON = async (path) => {
+    if (path === "/api/v1/search/search") return { ok: false, status: 503 };
+    if (path === "/api/v1/search/recall") return { ok: false, status: 404 };
+    if (path === "/api/v1/system/status") return { ok: true, result: { user: "default" } };
+    if (path.startsWith("/api/v1/fs/ls")) return { ok: true, result: [] };
+    if (path === "/api/v1/search/find") return { ok: true, result: { memories, skills: [] } };
+    if (path.startsWith("/api/v1/content/read")) {
+      reads.push(path);
+      return { ok: true, result: "x".repeat(900) };
+    }
+    return { ok: false, status: 404 };
+  };
+
+  const block = await buildRecallBlock(fetchJSON, {
+    recallLimit: 4,
+    recallMaxContentChars: 1000,
+    recallTokenBudget: 200,
+    scoreThreshold: 0.35,
+    recallPreferAbstract: false,
+  }, "what happened yesterday", { legacyCachePath });
+
+  // The first body alone (~229 estimated tokens) overshoots the 200-token
+  // floor, so items two through four degrade to URI hints — but their bodies
+  // were still prefetched in one concurrent batch instead of being skipped.
+  assert.equal(reads.length, 4);
+  const bodyLines = block.split("\n").filter((line) => line.startsWith("- ["));
+  assert.match(bodyLines[0], /x{900}/);
+  for (const line of bodyLines.slice(1)) assert.doesNotMatch(line, /x{900}/);
+});
+
 function recordingFetch(responses) {
   const sent = [];
   const queue = [...responses];
