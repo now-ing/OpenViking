@@ -198,7 +198,7 @@ jobs:
           enable-cache: true
 
       - name: Install bot dependencies
-        run: uv sync --frozen --extra bot
+        run: uv sync --frozen --extra bot --extra test
 
       - name: Run VikingBot unit tests
         run: |
