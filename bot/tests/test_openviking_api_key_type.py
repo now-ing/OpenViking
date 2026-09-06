@@ -71,7 +71,13 @@ class _DummyHTTPClient:
     async def batch_add_messages(self, session_id, messages):
         return {"session_id": session_id, "added": len(messages), "message_count": len(messages)}
 
-    async def commit_session(self, session_id, keep_recent_count=0, telemetry=False):
+    async def commit_session(
+        self,
+        session_id,
+        keep_recent_count=0,
+        telemetry=False,
+        **_retention_kwargs,
+    ):
         return {
             "session_id": session_id,
             "status": "committed",
@@ -129,6 +135,7 @@ def _make_config(api_key_type: str, mode: str = "remote", **ov_overrides):
         "session_context_token_budget": 12000,
         "commit_token_threshold": 6000,
         "commit_keep_recent_count": 10,
+        "commit_keep_recent_turn_count": 3,
     }
     agent_overrides = {}
     for key in tuple(agent_defaults):
@@ -1195,7 +1202,7 @@ async def test_compact_hook_session_context_commits_single_session_with_peer_mes
             "root",
             session_context_enabled=True,
             commit_token_threshold=100,
-            commit_keep_recent_count=2,
+            commit_keep_recent_turn_count=2,
         ),
     )
 
@@ -1238,7 +1245,14 @@ async def test_compact_hook_session_context_commits_single_session_with_peer_mes
             user_id=None,
             **_retention_kwargs,
         ):
-            self.commit_calls.append((session_id, keep_recent_count, user_id))
+            self.commit_calls.append(
+                (
+                    session_id,
+                    _retention_kwargs.get("retention_mode"),
+                    _retention_kwargs.get("keep_recent_turn_count"),
+                    user_id,
+                )
+            )
             return {"session_id": session_id, "status": "accepted"}
 
     fake_client = _FakeClient()
@@ -1284,7 +1298,7 @@ async def test_compact_hook_session_context_commits_single_session_with_peer_mes
             "admin",
         )
     ]
-    assert fake_client.commit_calls == [(storage_session_id, 0, "admin")]
+    assert fake_client.commit_calls == [(storage_session_id, "turn_budget", 2, "admin")]
     assert {session_id for session_id, _user_id in fake_client.session_calls} == {
         storage_session_id
     }
@@ -1346,7 +1360,7 @@ async def test_compact_hook_force_commit_does_not_resync_already_synced_messages
             "root",
             session_context_enabled=True,
             commit_token_threshold=100,
-            commit_keep_recent_count=2,
+            commit_keep_recent_turn_count=2,
         ),
     )
 
@@ -1371,8 +1385,21 @@ async def test_compact_hook_force_commit_does_not_resync_already_synced_messages
         async def get_session(self, session_id, user_id=None):
             return {"session_id": session_id, "pending_tokens": 120}
 
-        async def commit_session(self, session_id, keep_recent_count=0, user_id=None):
-            self.commit_calls.append((session_id, keep_recent_count, user_id))
+        async def commit_session(
+            self,
+            session_id,
+            keep_recent_count=0,
+            user_id=None,
+            **_retention_kwargs,
+        ):
+            self.commit_calls.append(
+                (
+                    session_id,
+                    _retention_kwargs.get("retention_mode"),
+                    _retention_kwargs.get("keep_recent_turn_count"),
+                    user_id,
+                )
+            )
             return {"session_id": session_id, "status": "accepted"}
 
     fake_client = _FakeClient()
@@ -1406,7 +1433,7 @@ async def test_compact_hook_force_commit_does_not_resync_already_synced_messages
 
     assert result["success"] is True
     assert fake_client.append_calls == [("cli__default__chat-1", ["new reply"])]
-    assert fake_client.commit_calls == [("cli__default__chat-1", 2, "admin")]
+    assert fake_client.commit_calls == [("cli__default__chat-1", "turn_budget", 2, "admin")]
     assert session.metadata["openviking"]["last_synced_local_index"] == 1
     assert session.metadata["openviking"]["last_commit_local_index"] == 1
 
@@ -1424,7 +1451,7 @@ async def test_compact_hook_force_commit_commits_current_session_without_unsynce
             "root",
             session_context_enabled=True,
             commit_token_threshold=1000,
-            commit_keep_recent_count=2,
+            commit_keep_recent_turn_count=2,
         ),
     )
 
@@ -1449,8 +1476,21 @@ async def test_compact_hook_force_commit_commits_current_session_without_unsynce
         async def get_session(self, session_id, user_id=None):
             return {"session_id": session_id, "pending_tokens": 120}
 
-        async def commit_session(self, session_id, keep_recent_count=0, user_id=None):
-            self.commit_calls.append((session_id, keep_recent_count, user_id))
+        async def commit_session(
+            self,
+            session_id,
+            keep_recent_count=0,
+            user_id=None,
+            **_retention_kwargs,
+        ):
+            self.commit_calls.append(
+                (
+                    session_id,
+                    _retention_kwargs.get("retention_mode"),
+                    _retention_kwargs.get("keep_recent_turn_count"),
+                    user_id,
+                )
+            )
             return {"session_id": session_id, "status": "accepted"}
 
     fake_client = _FakeClient()
@@ -1484,7 +1524,7 @@ async def test_compact_hook_force_commit_commits_current_session_without_unsynce
 
     assert result["success"] is True
     assert fake_client.append_calls == []
-    assert fake_client.commit_calls == [("cli__default__chat-1", 2, "admin")]
+    assert fake_client.commit_calls == [("cli__default__chat-1", "turn_budget", 2, "admin")]
     assert session.metadata["openviking"]["last_commit_performed"] is True
 
 
@@ -1501,7 +1541,7 @@ async def test_compact_hook_session_context_append_failure_does_not_advance_sync
             "root",
             session_context_enabled=True,
             commit_token_threshold=100,
-            commit_keep_recent_count=2,
+            commit_keep_recent_turn_count=2,
         ),
     )
 
@@ -1528,8 +1568,21 @@ async def test_compact_hook_session_context_append_failure_does_not_advance_sync
         async def get_session(self, session_id, user_id=None):
             return {"session_id": session_id, "pending_tokens": 120}
 
-        async def commit_session(self, session_id, keep_recent_count=0, user_id=None):
-            self.commit_calls.append((session_id, keep_recent_count, user_id))
+        async def commit_session(
+            self,
+            session_id,
+            keep_recent_count=0,
+            user_id=None,
+            **_retention_kwargs,
+        ):
+            self.commit_calls.append(
+                (
+                    session_id,
+                    _retention_kwargs.get("retention_mode"),
+                    _retention_kwargs.get("keep_recent_turn_count"),
+                    user_id,
+                )
+            )
             return {"session_id": session_id, "status": "accepted"}
 
     fake_client = _FakeClient()
@@ -1581,7 +1634,7 @@ async def test_compact_hook_session_context_commits_when_message_threshold_reach
             "root",
             session_context_enabled=True,
             commit_token_threshold=1000,
-            commit_keep_recent_count=2,
+            commit_keep_recent_turn_count=2,
         ),
     )
 
@@ -1606,8 +1659,21 @@ async def test_compact_hook_session_context_commits_when_message_threshold_reach
         async def get_session(self, session_id, user_id=None):
             return {"session_id": session_id, "pending_tokens": 0}
 
-        async def commit_session(self, session_id, keep_recent_count=0, user_id=None):
-            self.commit_calls.append((session_id, keep_recent_count, user_id))
+        async def commit_session(
+            self,
+            session_id,
+            keep_recent_count=0,
+            user_id=None,
+            **_retention_kwargs,
+        ):
+            self.commit_calls.append(
+                (
+                    session_id,
+                    _retention_kwargs.get("retention_mode"),
+                    _retention_kwargs.get("keep_recent_turn_count"),
+                    user_id,
+                )
+            )
             return {"session_id": session_id, "status": "accepted"}
 
     fake_client = _FakeClient()
@@ -1644,7 +1710,7 @@ async def test_compact_hook_session_context_commits_when_message_threshold_reach
     assert result["success"] is True
     assert result["admin_result"]["committed"] is True
     assert fake_client.append_calls == [("cli__default__chat-1", ["m3"])]
-    assert fake_client.commit_calls == [("cli__default__chat-1", 2, "admin")]
+    assert fake_client.commit_calls == [("cli__default__chat-1", "turn_budget", 2, "admin")]
     assert session.metadata["openviking"]["last_commit_local_index"] == 2
 
 
@@ -1661,7 +1727,7 @@ async def test_compact_hook_session_commit_failure_retries_without_resyncing_mes
             "root",
             session_context_enabled=True,
             commit_token_threshold=100,
-            commit_keep_recent_count=2,
+            commit_keep_recent_turn_count=2,
         ),
     )
 
@@ -1687,8 +1753,21 @@ async def test_compact_hook_session_commit_failure_retries_without_resyncing_mes
         async def get_session(self, session_id, user_id=None):
             return {"session_id": session_id, "pending_tokens": 120}
 
-        async def commit_session(self, session_id, keep_recent_count=0, user_id=None):
-            self.commit_calls.append((session_id, keep_recent_count, user_id))
+        async def commit_session(
+            self,
+            session_id,
+            keep_recent_count=0,
+            user_id=None,
+            **_retention_kwargs,
+        ):
+            self.commit_calls.append(
+                (
+                    session_id,
+                    _retention_kwargs.get("retention_mode"),
+                    _retention_kwargs.get("keep_recent_turn_count"),
+                    user_id,
+                )
+            )
             if session_id == "cli__default__chat-1" and self.fail_session_commit:
                 raise RuntimeError("session commit failed")
             return {"session_id": session_id, "status": "accepted"}
@@ -1719,7 +1798,7 @@ async def test_compact_hook_session_commit_failure_retries_without_resyncing_mes
     assert first["success"] is False
     assert "session commit failed" in first["error"]
     assert fake_client.append_calls == [("cli__default__chat-1", ["u1 asks", "u1 reply"])]
-    assert fake_client.commit_calls == [("cli__default__chat-1", 2, "admin")]
+    assert fake_client.commit_calls == [("cli__default__chat-1", "turn_budget", 2, "admin")]
     state = session.metadata["openviking"]
     assert state["last_sync_status"] == "error"
     assert state["last_synced_local_index"] == 1
@@ -1733,7 +1812,7 @@ async def test_compact_hook_session_commit_failure_retries_without_resyncing_mes
 
     assert second["success"] is True
     assert fake_client.append_calls == []
-    assert fake_client.commit_calls == [("cli__default__chat-1", 2, "admin")]
+    assert fake_client.commit_calls == [("cli__default__chat-1", "turn_budget", 2, "admin")]
     assert session.metadata["openviking"]["last_commit_performed"] is True
 
 
@@ -1750,7 +1829,7 @@ async def test_compact_hook_session_context_skips_message_threshold_after_recent
             "root",
             session_context_enabled=True,
             commit_token_threshold=1000,
-            commit_keep_recent_count=2,
+            commit_keep_recent_turn_count=2,
         ),
     )
 
@@ -1775,8 +1854,21 @@ async def test_compact_hook_session_context_skips_message_threshold_after_recent
         async def get_session(self, session_id, user_id=None):
             return {"session_id": session_id, "pending_tokens": 0}
 
-        async def commit_session(self, session_id, keep_recent_count=0, user_id=None):
-            self.commit_calls.append((session_id, keep_recent_count, user_id))
+        async def commit_session(
+            self,
+            session_id,
+            keep_recent_count=0,
+            user_id=None,
+            **_retention_kwargs,
+        ):
+            self.commit_calls.append(
+                (
+                    session_id,
+                    _retention_kwargs.get("retention_mode"),
+                    _retention_kwargs.get("keep_recent_turn_count"),
+                    user_id,
+                )
+            )
             return {"session_id": session_id, "status": "accepted"}
 
     fake_client = _FakeClient()
