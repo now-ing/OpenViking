@@ -90,6 +90,39 @@ class TestPatchOp:
         assert await op_int.apply(100, 200) == 200
 
     @pytest.mark.asyncio
+    async def test_full_string_replacement_strips_display_prefixes(self):
+        """A full replacement copied from the numbered read view must not store
+        display prefixes (#4413)."""
+        op = PatchOp(FieldType.STRING)
+        numbered = "1\t# Deployment\n2\t- Auth: required"
+
+        assert await op.apply("old", numbered) == "# Deployment\n- Auth: required"
+
+    @pytest.mark.asyncio
+    async def test_full_string_replacement_preserves_tabular_data(self):
+        """Non-consecutive numeric columns are genuine data (#4413)."""
+        op = PatchOp(FieldType.STRING)
+        tsv = "1\tfoo\tbar\n3\tbaz\tqux"
+
+        assert await op.apply("old", tsv) == tsv
+
+    @pytest.mark.asyncio
+    async def test_no_original_content_strips_display_prefixes_per_block(self):
+        """New-memory patches are cleaned per block before joining, so numbers
+        that restart per block cannot reappear (#4413)."""
+        op = PatchOp(FieldType.STRING)
+        patch = StrPatch(
+            blocks=[
+                SearchReplaceBlock(search="", replace="1\t## Deploy\n2\t- Auth: required"),
+                SearchReplaceBlock(search="", replace="1\t- Bind: loopback"),
+            ]
+        )
+
+        result = await op.apply(None, patch)
+
+        assert result == "## Deploy\n- Auth: required\n- Bind: loopback"
+
+    @pytest.mark.asyncio
     async def test_apply_dict_patch(self, monkeypatch):
         """Dict-form string patches should be applied without blocking the event loop."""
         from openviking.session.memory.merge_op import patch_handler
@@ -502,6 +535,60 @@ class TestApplyStrPatch:
         result = apply_str_patch(original, patch)
 
         assert result == "## Roadmap\n- step one\n- step two"
+
+    def test_exact_match_replace_with_prefix_cannot_write_display_prefixes(self):
+        """REPLACE copied from the numbered view must not leak prefixes via the
+        exact-match fast path, even when SEARCH itself is clean (#4413)."""
+        original = "# Deployment\n- Bind: loopback"
+        patch = StrPatch(
+            blocks=[
+                SearchReplaceBlock(
+                    search="- Bind: loopback",
+                    replace="2\t- Bind: Tailscale",
+                )
+            ]
+        )
+
+        result = apply_str_patch(original, patch)
+
+        assert result == "# Deployment\n- Bind: Tailscale"
+
+    def test_write_path_strips_consecutive_prefixes_from_replace_only_blocks(self):
+        """A REPLACE that independently forms a consecutive numbered view is cleaned
+        even when SEARCH carries no prefixes at all (#4413)."""
+        original = "## Deploy\n- Auth: required"
+        patch = StrPatch(
+            blocks=[
+                SearchReplaceBlock(
+                    search="- Auth: required",
+                    replace="2\t- Auth: optional\n3\t- Bind: loopback",
+                )
+            ]
+        )
+
+        result = apply_str_patch(original, patch)
+
+        assert result == "## Deploy\n- Auth: optional\n- Bind: loopback"
+
+    def test_write_path_preserves_genuine_tabular_replace(self):
+        """Non-consecutive numeric first columns are real data, not display
+        prefixes, and must survive the write path (#4413)."""
+        tsv = "1\tfoo\tbar\n3\tbaz\tqux"
+        patch = StrPatch(blocks=[SearchReplaceBlock(search="header", replace=tsv)])
+
+        result = apply_str_patch("header", patch)
+
+        assert result == tsv
+
+    def test_write_path_preserves_mixed_numbered_and_plain_replace(self):
+        """Mixed numbered/plain REPLACE lines carry no numbered-view proof and
+        must be stored verbatim (#4413)."""
+        mixed = "1\theader\nplain line\n3\tmore"
+        patch = StrPatch(blocks=[SearchReplaceBlock(search="seed", replace=mixed)])
+
+        result = apply_str_patch("seed", patch)
+
+        assert result == mixed
 
 
 # ============================================================================

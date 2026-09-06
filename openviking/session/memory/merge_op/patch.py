@@ -13,6 +13,7 @@ from openviking.session.memory.merge_op.base import (
     StrPatch,
     get_python_type_for_field,
 )
+from openviking.session.memory.utils.line_numbers import strip_display_prefixes
 
 
 class PatchOp(MergeOpBase):
@@ -104,6 +105,10 @@ class PatchOp(MergeOpBase):
         # 空字符串和 None 都保持原值
         if patch_value is None or patch_value == "":
             return current_value
+        if isinstance(patch_value, str):
+            # Write-path cleanup (#4413): a full replacement copied from the
+            # numbered read view must not store display prefixes.
+            return strip_display_prefixes(patch_value)
         return patch_value
 
     def _extract_replace_when_no_original(self, patch_value: Any) -> Any:
@@ -125,7 +130,13 @@ class PatchOp(MergeOpBase):
         # patch. Taking only blocks[0] would silently drop every subsequent
         # fact/preference the model extracted.
         if isinstance(patch_value, StrPatch):
-            replaces = [b.replace for b in patch_value.blocks if b.replace is not None]
+            # Clean each block before joining: per-block numbered views are
+            # consecutive, but the joined numbers restart per block (#4413).
+            replaces = [
+                strip_display_prefixes(b.replace)
+                for b in patch_value.blocks
+                if b.replace is not None
+            ]
             return "\n".join(replaces) if replaces else ""
 
         # Case 2: dict form (from JSON parsing) — same, collect every block.
@@ -139,11 +150,11 @@ class PatchOp(MergeOpBase):
                 else:
                     replace = None
                 if replace is not None:
-                    replaces.append(replace)
+                    replaces.append(strip_display_prefixes(replace))
             return "\n".join(replaces) if replaces else ""
 
         # Case 3: Simple string - use as is
         if isinstance(patch_value, str):
-            return patch_value
+            return strip_display_prefixes(patch_value)
 
         return ""

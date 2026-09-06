@@ -68,3 +68,36 @@ def every_line_has_line_numbers(content: str) -> bool:
     if not lines:
         return False
     return all(_LINE_NUMBER_PREFIX_RE.match(line) for line in lines)
+
+
+def looks_like_line_numbered_view(content: str) -> bool:
+    """Whether the whole content reads as a numbered view add_line_numbers() produced.
+
+    Every line (a trailing newline allowed) must start with an ``N\\t`` prefix
+    and the numbers must form one consecutive increasing run. Genuine
+    tabular data whose first column happens to be numeric almost never forms
+    an exact consecutive run, so this keeps real content intact.
+    """
+    lines = split_content_lines(content)
+    if lines and lines[-1] == "":
+        lines = lines[:-1]
+    if not lines:
+        return False
+    numbers = []
+    for line in lines:
+        match = _LINE_NUMBER_PREFIX_RE.match(line)
+        if match is None:
+            return False
+        numbers.append(int(match.group(1)))
+    return all(right - left == 1 for left, right in zip(numbers, numbers[1:]))
+
+
+def strip_display_prefixes(content: str) -> str:
+    """Strip line-number prefixes when content looks like a numbered view.
+
+    No-op otherwise, so genuine numeric/tabular content is preserved
+    (issue #4413 write-path cleanup).
+    """
+    if not looks_like_line_numbered_view(content):
+        return content
+    return strip_line_numbers(content)
