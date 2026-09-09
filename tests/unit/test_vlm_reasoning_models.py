@@ -18,8 +18,8 @@ class TestOpenAITextCompletionParams:
                 "max_tokens": 512,
             }
         )
-        kwargs = vlm._build_text_kwargs(prompt="hi")
-        assert kwargs["max_completion_tokens"] == 512
+        kwargs = vlm._build_text_kwargs(prompt="hi", max_tokens=128)
+        assert kwargs["max_completion_tokens"] == 128
         assert "max_tokens" not in kwargs
         assert "temperature" not in kwargs
         assert kwargs["reasoning_effort"] == "low"
@@ -48,9 +48,9 @@ class TestOpenAITextCompletionParams:
             temperature=0.3,
             reasoning_effort="high",
         ).get_vlm_instance()
-        kwargs = vlm._build_text_kwargs(prompt="hi")
+        kwargs = vlm._build_text_kwargs(prompt="hi", max_tokens=128)
         assert kwargs["reasoning_effort"] == "high"
-        assert kwargs["max_tokens"] == 512
+        assert kwargs["max_tokens"] == 128
         assert "max_completion_tokens" not in kwargs
         assert kwargs["temperature"] == 0.3
 
